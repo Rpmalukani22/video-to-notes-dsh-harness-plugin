@@ -2,7 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist/plugin",
-    "rootDir": "./src/plugin"
+    "rootDir": "./src"
   },
   "include": ["src/plugin/**/*"]
 }
