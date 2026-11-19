@@ -1,0 +1,76 @@
+{
+  "name": "video-to-notes",
+  "version": "0.1.0",
+  "description": "Transform video content into structured, searchable Markdown notes with timestamps, citations, and grounded summaries",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "vtn": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "vtn": "node dist/cli/index.js",
+    "server": "node dist/interfaces/rest/server.js",
+    "dev": "tsx watch src/cli/index.ts",
+    "prepare": "husky install"
+  },
+  "keywords": [
+    "video",
+    "notes",
+    "transcription",
+    "ocr",
+    "markdown",
+    "summarization",
+    "llm",
+    "deepseek",
+    "harness"
+  ],
+  "author": "rpmalukani22",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rpmalukani22/video-to-notes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rpmalukani22/video-to-notes/issues"
+  },
+  "homepage": "https://github.com/rpmalukani22/video-to-notes#readme",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "commander": "^11.1.0",
+    "fastify": "^4.24.0",
+    "sharp": "^0.33.0",
+    "undici": "^6.0.0",
+    "zod": "^3.22.0",
+    "@deepseek/dsh": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "husky": "^8.0.3",
+    "prettier": "^3.1.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0",
+    "@vitest/coverage-v8": "^1.0.0"
+  },
+  "volta": {
+    "node": "20.10.0"
+  }
+}
