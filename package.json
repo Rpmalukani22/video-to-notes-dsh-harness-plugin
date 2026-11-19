@@ -79,6 +79,7 @@
       "name": "video-to-notes",
       "main": "dist/plugin/index.js",
       "types": "dist/plugin/index.d.ts",
+      "patch": "dsh.bundle.patch.yml",
       "cordis": {
         "name": "video-to-notes",
         "inject": ["tools"],
