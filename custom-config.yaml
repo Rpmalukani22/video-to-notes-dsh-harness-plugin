@@ -1,0 +1,34 @@
+processing:
+  frameExtraction:
+    preset: lecture
+    strategy: adaptive
+    sceneThreshold: 0.3
+    minIntervalSec: 30
+    maxIntervalSec: 5
+    intervalSec: 15
+    enableTransientDetection: false
+    maxFrames: 500
+    fastExtract: true
+    fastIntervalSec: 20
+    enableRegionDetection: false
+  ocr:
+    # Disable OCR - user doesn't want OCR in notes
+    enabled: false
+  transcription:
+    # Disable transcription - user doesn't want transcripts in notes
+    enabled: false
+  note:
+    template: default
+    outputFormats: ['md']
+    citationFormat: inline
+    detailLevel: comprehensive
+  privacy: local-only
+  batch:
+    maxConcurrent: 2
+    checkpointInterval: 1
+    resume: true
+llm:
+  provider: none
+  temperature: 0.2
+  maxTokens: 2048
+  topP: 0.95

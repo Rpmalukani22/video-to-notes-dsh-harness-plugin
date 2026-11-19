@@ -101,3 +101,4 @@ cordis.patch.yml
 # IDE
 .idea/
 *.iml
+dist-plugin/

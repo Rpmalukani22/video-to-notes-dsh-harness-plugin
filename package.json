@@ -2,16 +2,27 @@
   "name": "video-to-notes",
   "version": "0.1.0",
   "description": "Transform video content into structured, searchable Markdown notes with timestamps, citations, and grounded summaries",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "type": "module",
+  "main": "dist/plugin/index.js",
+  "types": "dist/plugin/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/plugin/index.d.ts",
+      "default": "./dist/plugin/index.js"
+    },
+    "./lib": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
-    "vtn": "dist/cli/index.js"
+    "vtn": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && npm run build:plugin",
-    "build:plugin": "tsc -p tsconfig.plugin.json",
+    "build": "tsc",
     "build:watch": "tsc --watch",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist dist-plugin",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
@@ -20,9 +31,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "vtn": "node dist/cli/index.js",
+    "vtn": "node dist/cli.js",
     "server": "node dist/interfaces/rest/server.js",
-    "dev": "tsx watch src/cli/index.ts",
+    "dev": "tsx watch src/cli.ts",
     "prepare": "husky install"
   },
   "keywords": [
@@ -47,7 +58,8 @@
   },
   "homepage": "https://github.com/rpmalukani22/video-to-notes#readme",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0",
+    "dsh": "^0.2.2-rc.1"
   },
   "dependencies": {
     "commander": "^11.1.0",
