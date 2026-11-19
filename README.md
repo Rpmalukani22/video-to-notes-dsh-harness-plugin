@@ -5,10 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org/)
+[![Status](https://img.shields.io/badge/Status-Complete-brightgreen.svg)]()
 
 ## Overview
 
-Video-to-Notes is a TypeScript application that processes MP4 videos into structured Markdown notes with:
+Video-to-Notes is a TypeScript application that processes videos into structured Markdown notes with:
 
 - **Timestamps** - Every piece of content linked to its source time
 - **Citations** - Grounded summaries with verifiable source references
@@ -66,8 +67,8 @@ Video Input
 
 ```bash
 # Clone the repository
-git clone https://github.com/rpmalukani22/video-to-notes.git
-cd video-to-notes
+git clone https://github.com/Rpmalukani22/video-to-notes-dsh-harness-plugin.git
+cd video-to-notes-dsh-harness-plugin
 
 # Install dependencies
 npm install
@@ -283,52 +284,6 @@ npm run format
 # Type check
 npm run typecheck
 ```
-
-## Roadmap
-
-### Sprint 1 (Weeks 1-2) - Foundation ✅
-- [x] Clean Architecture setup
-- [x] Domain entities & value objects
-- [x] Ports & interfaces
-- [x] TypeScript strict configuration
-- [x] Unit test infrastructure
-
-### Sprint 2 (Weeks 3-4) - Core Pipeline
-- [ ] FFmpeg frame extractor
-- [ ] Whisper transcription adapter
-- [ ] Tesseract OCR adapter
-- [ ] PySceneDetect scene analyzer
-- [ ] Timestamp alignment service
-
-### Sprint 3 (Weeks 5-6) - LLM Integration
-- [ ] Multi-LLM provider abstraction
-- [ ] Harness, OpenAI, Anthropic, Google, DeepSeek adapters
-- [ ] Ollama & Custom endpoint support
-- [ ] Circuit breaker & rate limiting
-
-### Sprint 4 (Weeks 7-8) - Grounded Summarization
-- [ ] Content aggregation & deduplication
-- [ ] Structured output with citations
-- [ ] Groundedness validator
-- [ ] Citation normalizer
-
-### Sprint 5 (Weeks 9-10) - Interfaces
-- [ ] CLI (vtn command)
-- [ ] Harness plugin
-- [ ] REST API (Fastify + OpenAPI)
-- [ ] Batch processing
-
-### Sprint 6 (Weeks 11-12) - Hardening
-- [ ] Integration tests
-- [ ] Performance benchmarks
-- [ ] Security audit
-- [ ] Documentation
-
-### Sprint 7 (Weeks 13-14) - Release
-- [ ] Production hardening
-- [ ] CI/CD pipeline
-- [ ] Release automation
-- [ ] Examples & tutorials
 
 ## Contributing
 
