@@ -1,0 +1,49 @@
+{
+    "projects": [
+        {
+            "name": "video-to-notes",
+            "created_at": "2026-11-18T01:47:44",
+            "skills": [
+                "video-content-extractor",
+                "watch-igaming",
+                "video-router",
+                "videodb",
+                "seek-and-analyze-video",
+                "reverse-any-video",
+                "audio-transcriber",
+                "architecture-patterns",
+                "clean-code",
+                "test-driven-development",
+                "pytest-skill",
+                "vitest-skill",
+                "security-audit",
+                "security-scanning-security-sast",
+                "performance-optimization",
+                "python-development",
+                "python-fastapi-development",
+                "typescript-pro",
+                "typescript-expert",
+                "readme",
+                "documentation-generation-doc-generate",
+                "github-actions",
+                "github-actions-advanced",
+                "gitlab-ci",
+                "security-audit",
+                "security-scanning-security-sast",
+                "performance-optimization",
+                "build",
+                "build-ui",
+                "ui-review",
+                "ui-skills",
+                "video-content-extractor",
+                "watch-igaming",
+                "video-router",
+                "videodb",
+                "seek-and-analyze-video",
+                "reverse-any-video",
+                "audio-transcriber"
+            ],
+            "description": "Video-to-Notes application: MP4 video analysis with frame extraction, OCR, transcription, scene detection, timestamp alignment, and structured note generation"
+        }
+    ]
+}
