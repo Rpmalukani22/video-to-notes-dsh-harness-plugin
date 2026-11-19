@@ -73,5 +73,27 @@
   },
   "volta": {
     "node": "20.10.0"
+  },
+  "dsh": {
+    "bundle": {
+      "name": "video-to-notes",
+      "main": "dist/plugin/index.js",
+      "types": "dist/plugin/index.d.ts",
+      "cordis": {
+        "name": "video-to-notes",
+        "inject": ["tools"],
+        "config": {
+          "ffmpegPath": "ffmpeg",
+          "ffprobePath": "ffprobe",
+          "tesseractPath": "tesseract",
+          "whisperPath": "whisper-cli",
+          "whisperModelDir": "./models",
+          "outputDir": "./notes",
+          "maxConcurrent": 2,
+          "logLevel": "info",
+          "configPath": ""
+        }
+      }
+    }
   }
 }
