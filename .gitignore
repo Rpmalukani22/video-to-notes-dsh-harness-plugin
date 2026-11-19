@@ -84,6 +84,11 @@ temp/
 logs/
 *.log
 
+# Models and outputs (large files)
+models/
+output/
+*.bin
+
 # IDE
 .idea/
 *.iml
