@@ -8,7 +8,8 @@
     "vtn": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:plugin",
+    "build:plugin": "tsc -p tsconfig.plugin.json",
     "build:watch": "tsc --watch",
     "clean": "rm -rf dist",
     "lint": "eslint src --ext .ts",
