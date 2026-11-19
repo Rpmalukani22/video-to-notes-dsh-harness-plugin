@@ -89,6 +89,15 @@ models/
 output/
 *.bin
 
+# Test results
+test-results/
+
+# Internal tooling
+.orchestrator/
+
+# DSH plugin config (generated)
+cordis.patch.yml
+
 # IDE
 .idea/
 *.iml
