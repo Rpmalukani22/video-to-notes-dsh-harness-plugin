@@ -262,13 +262,25 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
       `ggml-${base}.en.bin`,   // ggml-base.en.bin (whisper.cpp download)
     ];
 
-    for (const name of candidates) {
-      const candidate = join(this._modelDir, name);
-      try {
-        await access(candidate);
-        return candidate;
-      } catch {
-        // Try the next spelling.
+    const searchDirs = [this._modelDir];
+    if (this._modelDir === './models' || this._modelDir === 'models') {
+      const cwdModels = join(process.cwd(), 'models');
+      if (!searchDirs.includes(cwdModels)) searchDirs.push(cwdModels);
+      const envDir = process.env['WHISPER_MODELS_DIR'];
+      if (envDir && !searchDirs.includes(envDir)) {
+        searchDirs.push(envDir);
+      }
+    }
+
+    for (const dir of searchDirs) {
+      for (const name of candidates) {
+        const candidate = join(dir, name);
+        try {
+          await access(candidate);
+          return candidate;
+        } catch {
+          // Try next
+        }
       }
     }
 
@@ -279,16 +291,28 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     );
   }
 
-  /** Locate a Silero VAD model (`ggml-silero-*.bin`) in the model directory. */
+  /** Locate a Silero VAD model (`ggml-silero-*.bin`) in the model directory or fallback paths. */
   private async resolveVadModelPath(): Promise<string | null> {
-    let entries: string[];
-    try {
-      entries = await readdir(this._modelDir);
-    } catch {
-      return null;
+    const searchDirs = [this._modelDir];
+    if (this._modelDir === './models' || this._modelDir === 'models') {
+      const cwdModels = join(process.cwd(), 'models');
+      if (!searchDirs.includes(cwdModels)) searchDirs.push(cwdModels);
+      const envDir = process.env['WHISPER_MODELS_DIR'];
+      if (envDir && !searchDirs.includes(envDir)) {
+        searchDirs.push(envDir);
+      }
     }
-    const match = entries.find((name) => /silero.*\.bin$/i.test(name));
-    return match === undefined ? null : join(this._modelDir, match);
+
+    for (const dir of searchDirs) {
+      try {
+        const entries = await readdir(dir);
+        const match = entries.find((name) => /silero.*\.bin$/i.test(name));
+        if (match) return join(dir, match);
+      } catch {
+        continue;
+      }
+    }
+    return null;
   }
 
   private getNextLargerModel(current: WhisperModel): WhisperModel {
