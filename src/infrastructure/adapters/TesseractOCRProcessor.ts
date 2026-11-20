@@ -79,12 +79,20 @@ export class TesseractOCRProcessor implements IOCRProcessor {
     const outputPath = join(tmpdir(), `vtn_ocr_pre_${randomUUID()}.png`);
     this._tempFiles.add(outputPath);
 
-    // Grayscale + contrast normalisation + slight sharpen. This is cheap and is
-    // what makes slide/deck text survive Tesseract's binarisation step.
-    await sharp(inputPath)
+    // Multi-stage sharpening and resolution enhancement:
+    // If image is less than 1080p (e.g. 720p or 480p), upscale 2x using Lanczos kernel.
+    // This scales character x-height from ~8-10px to ~16-20px, dramatically boosting Tesseract accuracy on code/slides.
+    let img = sharp(inputPath);
+    const meta = await img.metadata();
+    if (meta.width && meta.width < 1920) {
+      const targetWidth = Math.min(3840, meta.width * 2);
+      img = img.resize({ width: targetWidth, kernel: 'lanczos3' });
+    }
+
+    await img
       .grayscale()
       .normalize()
-      .sharpen()
+      .sharpen({ sigma: 1.5, m1: 1.0, m2: 2.0 })
       .png({ compressionLevel: 0 })
       .toFile(outputPath);
 
@@ -144,7 +152,7 @@ export class TesseractOCRProcessor implements IOCRProcessor {
           return;
         }
         readFile(tsvPath, 'utf8')
-          .then((tsv) => resolve(parseTesseractTsv(tsv, config.languages[0] ?? 'eng')))
+          .then((tsv) => resolve(parseTesseractTsv(tsv, config.languages[0] ?? 'eng', config.confidenceThreshold ?? 0.40)))
           .catch((error: unknown) => reject(error instanceof Error ? error : new Error(String(error))));
       });
 
@@ -179,7 +187,11 @@ export class TesseractOCRProcessor implements IOCRProcessor {
  * Columns: level page_num block_num par_num line_num word_num left top width height conf text
  * Only rows with level 5 contain words. `conf` is 0-100, or -1 for non-text.
  */
-export function parseTesseractTsv(tsv: string, language: string): OCRResult {
+export function parseTesseractTsv(
+  tsv: string,
+  language: string,
+  minConfidence: number = 0.40
+): OCRResult {
   const lines = new Map<string, { words: Array<{ text: string; conf: number; box: BoundingBox }> }>();
 
   for (const rawLine of tsv.split(/\r?\n/)) {
@@ -192,8 +204,12 @@ export function parseTesseractTsv(tsv: string, language: string): OCRResult {
     const text = cols.slice(11).join('\t').trim();
     if (level !== 5 || text.length === 0) continue;
 
+    // Discard single-character noise artifacts (stray accents, tildes, single quotes)
+    if (text.length === 1 && !/[a-zA-Z0-9$+\-*=_{}()[\]<>#/\\|]/.test(text)) continue;
+
     const conf = Number(cols[10]);
-    if (!Number.isFinite(conf) || conf < 0) continue;
+    // Enforce confidence threshold: filter out garbage detections
+    if (!Number.isFinite(conf) || conf < minConfidence * 100) continue;
 
     const left = Number(cols[6]) || 0;
     const top = Number(cols[7]) || 0;

@@ -207,7 +207,8 @@ export class Services {
         options.whisperPath ?? 'whisper-cli',
         resolve(options.whisperModelDir ?? join(cwd, 'models')),
         logger,
-        metrics
+        metrics,
+        ffmpeg
       ),
       sceneAnalyzer: new PySceneDetectSceneAnalyzer(options.scenedetectPath ?? 'scenedetect', logger, metrics),
       timestampAligner: new TimestampAligner(),

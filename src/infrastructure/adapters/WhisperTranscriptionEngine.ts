@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import { access, readFile, readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { AudioChunker } from './AudioChunker.js';
 
 type WhisperModel = TranscriptionConfig['model'];
 
@@ -17,13 +18,17 @@ const MODEL_CHAIN: WhisperModel[] = ['tiny.int8', 'base.int8', 'small.int8', 'la
  *
  * Runs `whisper-cli -m <model> -f <audio> --output-json <file>` and converts
  * the JSON output into a domain `Transcript`.
+ * Features:
+ * - Dynamic timeout scaling with audio duration (never static 5m)
+ * - Automatic chunking for long audio (>10m) with seamless timestamp stitching
+ * - Instant chunk-level VAD fallback when audio has speech obscured by noise
  */
 export class WhisperTranscriptionEngine implements ITranscriptionEngine {
   private readonly _whisperPath: string;
   private readonly _modelDir: string;
   private readonly _logger: ILogger;
   private readonly _metrics: IMetricsCollector;
-  private readonly _timeoutMs: number;
+  private readonly _chunker: AudioChunker;
   private _currentModel: string | null = null;
 
   constructor(
@@ -31,13 +36,13 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     modelDir: string,
     logger: ILogger,
     metrics: IMetricsCollector,
-    timeoutMs: number = 300000
+    ffmpegPath: string = 'ffmpeg'
   ) {
     this._whisperPath = whisperPath;
     this._modelDir = modelDir;
     this._logger = logger;
     this._metrics = metrics;
-    this._timeoutMs = timeoutMs;
+    this._chunker = new AudioChunker(ffmpegPath, logger);
   }
 
   async transcribe(audio: AudioFile, config: TranscriptionConfig): Promise<Transcript> {
@@ -45,9 +50,15 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     // Fail before spawning anything when the model file is absent.
     await this.resolveModelPath(config.model);
 
-    let result = await this.runTranscription(audio, config);
+    // If audio is longer than 10 minutes (600s), process in chunks for resilience & progress
+    let result: { segments: TranscriptSegment[]; language: string; averageConfidence: number };
+    if (audio.duration > 600) {
+      result = await this.transcribeChunked(audio, config);
+    } else {
+      result = await this.runTranscriptionWithFallback(audio, config);
+    }
 
-    if (config.enableEscalation && config.maxEscalations > 0) {
+    if (config.enableEscalation && config.maxEscalations > 0 && result.segments.length > 0) {
       let escalations = 0;
       let current = config;
       while (result.averageConfidence < config.escalationThreshold && escalations < config.maxEscalations) {
@@ -59,7 +70,9 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
           confidence: result.averageConfidence,
         });
         current = { ...current, model: nextModel };
-        result = await this.runTranscription(audio, current);
+        result = audio.duration > 600
+          ? await this.transcribeChunked(audio, current)
+          : await this.runTranscriptionWithFallback(audio, current);
         escalations += 1;
       }
     }
@@ -69,6 +82,81 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     this._currentModel = config.model;
 
     return new Transcript(audio.videoId, result.segments, result.language, config.model, processingTimeMs);
+  }
+
+  private async transcribeChunked(
+    audio: AudioFile,
+    config: TranscriptionConfig
+  ): Promise<{ segments: TranscriptSegment[]; language: string; averageConfidence: number }> {
+    const chunks = await this._chunker.splitIntoChunks(audio, tmpdir(), 600);
+    const allSegments: TranscriptSegment[] = [];
+    let detectedLanguage = config.language ?? 'en';
+    let totalConfidenceSum = 0;
+    let totalSegmentCount = 0;
+
+    this._logger.info(`Starting chunked transcription for ${chunks.length} chunks...`);
+
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]!;
+        this._logger.info(`Transcribing chunk ${i + 1}/${chunks.length} (${chunk.startSec.toFixed(0)}s - ${(chunk.startSec + chunk.durationSec).toFixed(0)}s)...`);
+
+        const chunkResult = await this.runTranscriptionWithFallback(chunk.audioFile, config);
+        if (chunkResult.language && chunkResult.language !== 'auto') {
+          detectedLanguage = chunkResult.language;
+        }
+
+        const offsetMs = Math.round(chunk.startSec * 1000);
+        for (const seg of chunkResult.segments) {
+          const startMs = seg.start.milliseconds + offsetMs;
+          const endMs = seg.end.milliseconds + offsetMs;
+          const offsetWords = seg.words.map((w) => ({
+            ...w,
+            start: Timestamp.fromMilliseconds(w.start.milliseconds + offsetMs),
+            end: Timestamp.fromMilliseconds(w.end.milliseconds + offsetMs),
+          }));
+
+          allSegments.push(
+            new TranscriptSegment(
+              `seg-${audio.videoId}-${startMs}`,
+              Timestamp.fromMilliseconds(startMs),
+              Timestamp.fromMilliseconds(endMs),
+              seg.text,
+              seg.confidence,
+              offsetWords,
+              seg.language,
+              seg.speakerId
+            )
+          );
+
+          totalConfidenceSum += seg.confidence.value;
+          totalSegmentCount++;
+        }
+      }
+    } finally {
+      await this._chunker.cleanupChunks(chunks);
+    }
+
+    const averageConfidence = totalSegmentCount > 0 ? totalConfidenceSum / totalSegmentCount : 0;
+    this._logger.info(`Chunked transcription complete: ${allSegments.length} total segments transcribed`);
+    return { segments: allSegments, language: detectedLanguage, averageConfidence };
+  }
+
+  private async runTranscriptionWithFallback(
+    audio: AudioFile,
+    config: TranscriptionConfig
+  ): Promise<{ segments: TranscriptSegment[]; language: string; averageConfidence: number }> {
+    let result = await this.runTranscription(audio, config);
+
+    // If VAD was enabled but resulted in zero segments on a non-empty audio track,
+    // automatically fallback to transcribing without VAD!
+    if (result.segments.length === 0 && config.enableVAD && audio.duration > 8) {
+      this._logger.warn(`VAD yielded 0 segments for audio (${audio.duration.toFixed(1)}s); retrying without VAD...`);
+      const noVadConfig = { ...config, enableVAD: false };
+      result = await this.runTranscription(audio, noVadConfig);
+    }
+
+    return result;
   }
 
   getSupportedModels(): string[] {
@@ -88,8 +176,6 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     config: TranscriptionConfig
   ): Promise<{ segments: TranscriptSegment[]; language: string; averageConfidence: number }> {
     const modelPath = await this.resolveModelPath(config.model);
-    // whisper.cpp appends the extension itself: `-oj` writes `<base>.json`, so
-    // `--output-file` must be given a name without one.
     const outputBase = join(tmpdir(), `whisper_${process.pid}_${Date.now()}`);
     const outputPath = `${outputBase}.json`;
 
@@ -97,14 +183,11 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
       '-m', modelPath,
       '-f', audio.path,
       '-l', config.language ?? 'auto',
-      // Full JSON is the only mode that carries per-token offsets, and those
-      // are what word-level timestamps are built from.
       config.wordTimestamps ? '-ojf' : '-oj',
       '--output-file', outputBase,
       '-t', '4',
     ];
-    // whisper.cpp requires an explicit Silero model for `--vad`; passing the
-    // flag alone aborts the run, so it is only added when the model is present.
+
     if (config.enableVAD) {
       const vadModel = await this.resolveVadModelPath();
       if (vadModel !== null) {
@@ -119,8 +202,11 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
       args.push('--prompt', config.vocabularyBoost);
     }
 
+    // Dynamic timeout: scales with audio duration + generous buffer
+    const timeoutMs = Math.max(600000, Math.round(audio.duration * 1000 * 2.0));
+
     try {
-      await this.spawnWhisper(args);
+      await this.spawnWhisper(args, timeoutMs);
       const raw = await readFile(outputPath, 'utf8');
       return parseWhisperJson(raw, audio.videoId);
     } catch (error) {
@@ -131,7 +217,7 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     }
   }
 
-  private spawnWhisper(args: string[]): Promise<void> {
+  private spawnWhisper(args: string[], timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const proc = spawn(this._whisperPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = '';
@@ -146,8 +232,8 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
 
       const timer = setTimeout(() => {
         proc.kill('SIGKILL');
-        finish(() => reject(new Error(`whisper.cpp timed out after ${this._timeoutMs}ms`)));
-      }, this._timeoutMs);
+        finish(() => reject(new Error(`whisper.cpp timed out after ${timeoutMs}ms`)));
+      }, timeoutMs);
 
       proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
       proc.stdout.on('data', () => undefined);

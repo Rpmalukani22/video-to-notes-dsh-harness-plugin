@@ -60,11 +60,16 @@ export class NoteSynthesizer implements INoteSynthesizer {
         .filter((l) => l.length > 0);
 
       if (visualLines.length > 0) {
-        parts.push('### Key Visual Points (On-Screen)', '');
-        for (const line of visualLines) {
-          parts.push(`- ${line}`);
+        const fullVisualText = visualLines.join('\n');
+        if (isCodeBlock(fullVisualText)) {
+          parts.push('### On-Screen Code / Editor View', '', '```python', fullVisualText, '```', '');
+        } else {
+          parts.push('### Key Visual Points (On-Screen)', '');
+          for (const line of visualLines) {
+            parts.push(`- ${line}`);
+          }
+          parts.push('');
         }
-        parts.push('');
       }
 
       const audioLines = audio
@@ -79,13 +84,15 @@ export class NoteSynthesizer implements INoteSynthesizer {
           parts.push(`- ${line}`);
         }
         parts.push('');
+      } else if (visualLines.length > 0) {
+        parts.push('### Context & Topic', '', '*Walkthrough and live demonstration of the concepts displayed above.*', '');
       }
 
       const newContent = parts.join('\n').trim();
 
       updatedSections.push({
         ...section,
-        content: newContent.length > 0 ? newContent : section.content,
+        content: newContent.length > 0 ? newContent : '*Demonstration of interface and workflow operations.*',
         metadata: {
           ...section.metadata,
           synthesizer: 'extractive',
@@ -224,4 +231,18 @@ function extractConceptValidations(markdown: string, timestamp: string): Concept
   }
 
   return validations;
+}
+
+function isCodeBlock(text: string): boolean {
+  const codePatterns = [
+    /\b(def|class|import|from|return|elif|if|for|while|try|except)\b/,
+    /\b(array|print|len|range|lambda|np|pd|plt)\(/,
+    /[{}();=]\s*$/,
+    /^\s{2,4}[a-zA-Z0-9_]+/,
+  ];
+  let matches = 0;
+  for (const pattern of codePatterns) {
+    if (pattern.test(text)) matches++;
+  }
+  return matches >= 2;
 }

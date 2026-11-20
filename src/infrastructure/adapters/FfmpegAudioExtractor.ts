@@ -52,7 +52,8 @@ export class FfmpegAudioExtractor implements IAudioExtractor {
     ];
 
     try {
-      await this.spawnFfmpeg(args, signal);
+      const timeout = Math.max(300000, Math.round(video.durationSeconds * 1000 * 0.5));
+      await this.spawnFfmpeg(args, signal, timeout);
 
       const metadata = await this.getAudioMetadata(outputPath, video.durationSeconds);
       this._metrics.recordHistogram('audio_extraction_duration_ms', Date.now() - startTime);
@@ -72,7 +73,7 @@ export class FfmpegAudioExtractor implements IAudioExtractor {
     }
   }
 
-  private spawnFfmpeg(args: string[], signal: AbortSignal): Promise<void> {
+  private spawnFfmpeg(args: string[], signal: AbortSignal, timeoutMs?: number): Promise<void> {
     return new Promise((resolve, reject) => {
       if (signal.aborted) {
         reject(new Error('Audio extraction aborted before start'));
@@ -81,7 +82,7 @@ export class FfmpegAudioExtractor implements IAudioExtractor {
 
       const proc = spawn(this._ffmpegPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: this._timeoutMs,
+        timeout: timeoutMs ?? this._timeoutMs,
       });
 
       let stderr = '';
