@@ -54,6 +54,15 @@ export function registerDoctorTool(ctx: Context, runtime: PluginRuntime): () => 
           lines.push('', 'Install ffmpeg and make sure ffmpeg/ffprobe are on PATH.');
         }
 
+        if (report.llmProvider === 'none') {
+          lines.push(
+            '',
+            'ℹ️ Note: LLM synthesis is currently inactive (running in offline extractive mode).',
+            'To enable AI notes synthesis with concept validation and error correction:',
+            '- Activate an LLM skill in DeepSeek Harness (e.g., llm-deepseek-api-key) or configure custom-config.yaml.'
+          );
+        }
+
         return { ok: report.ok, report: lines.join('\n') };
       },
     })

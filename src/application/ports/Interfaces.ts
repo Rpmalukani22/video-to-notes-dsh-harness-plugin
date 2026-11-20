@@ -110,6 +110,14 @@ export interface TranscriptionConfig {
   enableEscalation: boolean;
   escalationThreshold: number;
   maxEscalations: number;
+  enhanceAudio?: boolean | undefined;
+}
+
+/**
+ * Audio enhancer port for noise reduction and loudness normalization
+ */
+export interface IAudioEnhancer {
+  enhance(audio: AudioFile, outputDir: string, signal?: AbortSignal): Promise<AudioFile>;
 }
 
 /**
@@ -151,6 +159,81 @@ export interface IContentAggregator {
 export interface INoteRenderer {
   render(note: Note, outputPath: string): Promise<void>;
   getSupportedFormats(): string[];
+}
+
+/**
+ * Manifest of all generated files per video analysis
+ */
+export interface OutputFileManifest {
+  transcript: string;
+  ocr: string;
+  notes: string;
+  framesDir: string;
+  all: string[];
+}
+
+/**
+ * Raw transcript markdown renderer
+ */
+export interface IRawTranscriptRenderer {
+  render(transcript: Transcript, outputPath: string, video?: Video): Promise<void>;
+  renderToString(transcript: Transcript, video?: Video): string;
+}
+
+/**
+ * Raw OCR markdown renderer
+ */
+export interface IRawOCRRenderer {
+  render(frames: Frame[], outputPath: string, video?: Video): Promise<void>;
+  renderToString(frames: Frame[], video?: Video): string;
+}
+
+/**
+ * Key frame copier / screenshot manager
+ */
+export interface IFrameCopier {
+  copyKeyFrames(
+    frames: Frame[],
+    outputDir: string,
+    baseName: string,
+    maxFrames?: number
+  ): Promise<Map<string, string>>; // frameId -> relative or saved image path
+}
+
+/**
+ * Concept validation model for discrepancies detected by LLM
+ */
+export interface ConceptValidation {
+  timestamp: string;
+  instructorSaid: string;
+  actualFact: string;
+  source: 'ocr-transcript-mismatch' | 'known-correction';
+  confidence: number;
+}
+
+export interface SynthesisInput {
+  video: Video;
+  transcript: Transcript;
+  frames: Frame[];
+  scenes: Scene[];
+  alignedBlocks: AlignedContentBlock[];
+  keyFramePaths: Map<string, string>;
+  sections: NoteSection[];
+}
+
+export interface SynthesisOptions {
+  detailLevel?: 'executive' | 'standard' | 'comprehensive' | undefined;
+  enableValidation?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+export interface SynthesizedResult {
+  sections: NoteSection[];
+  validations: ConceptValidation[];
+}
+
+export interface INoteSynthesizer {
+  synthesize(input: SynthesisInput, options?: SynthesisOptions): Promise<SynthesizedResult>;
 }
 
 /**

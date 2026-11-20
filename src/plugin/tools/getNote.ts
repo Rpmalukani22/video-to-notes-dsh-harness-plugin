@@ -37,6 +37,9 @@ export function registerGetNoteTool(ctx: Context, runtime: PluginRuntime): () =>
             videoPath: { type: 'string' },
             elapsedMs: { type: 'integer' },
             notePath: { type: 'string' },
+            transcriptPath: { type: 'string' },
+            ocrPath: { type: 'string' },
+            framesDir: { type: 'string' },
             note: { type: 'string' },
             warnings: { type: 'string' },
             error: { type: 'string' },
@@ -46,8 +49,27 @@ export function registerGetNoteTool(ctx: Context, runtime: PluginRuntime): () =>
           const status = field(value, 'status');
           if (status === 'completed') {
             const note = field(value, 'note');
-            const path = field(value, 'notePath');
-            return [{ type: 'text', text: note.length > 0 ? note : `Note written to ${path}` }];
+            const notePath = field(value, 'notePath');
+            const transcriptPath = field(value, 'transcriptPath');
+            const ocrPath = field(value, 'ocrPath');
+            const framesDir = field(value, 'framesDir');
+            const warnings = field(value, 'warnings');
+
+            let banner = '### 🎬 Video Processing Complete!\n\n' +
+              '**Outputs generated:**\n' +
+              `1. 📝 **Synthesized Notes (with Screenshots):** \`${notePath}\`\n` +
+              `2. 📋 **Full Transcript:** \`${transcriptPath}\`\n` +
+              `3. 🔍 **On-Screen OCR Text:** \`${ocrPath}\`\n` +
+              (framesDir ? `📸 **Screenshots Directory:** \`${framesDir}\`\n\n` : '\n');
+
+            if (warnings.includes('VAD_EMPTY_TRANSCRIPT')) {
+              banner += '> ⚠️ **Speech Detection Warning:** Audio was detected, but Voice Activity Detection (VAD) returned no transcript.\n' +
+                '> Background noise or fan sound may have triggered VAD speech suppression.\n' +
+                '> **Suggested fix:** Re-run with `vadEnabled: false` or `enhanceAudio: true`.\n\n';
+            }
+
+            banner += '---\n\n' + note;
+            return [{ type: 'text', text: banner }];
           }
           if (status === 'failed') {
             return [{ type: 'text', text: `Job failed: ${field(value, 'error')}` }];
@@ -79,6 +101,9 @@ export function registerGetNoteTool(ctx: Context, runtime: PluginRuntime): () =>
           videoPath: job.videoPath,
           elapsedMs: job.elapsedMs,
           ...(job.notePath !== undefined ? { notePath: job.notePath } : {}),
+          ...(job.transcriptPath !== undefined ? { transcriptPath: job.transcriptPath } : {}),
+          ...(job.ocrPath !== undefined ? { ocrPath: job.ocrPath } : {}),
+          ...(job.framesDir !== undefined ? { framesDir: job.framesDir } : {}),
           ...(job.note !== undefined ? { note: job.note } : {}),
           warnings: job.warnings,
           ...(job.error !== undefined ? { error: job.error } : {}),

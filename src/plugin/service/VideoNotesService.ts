@@ -21,6 +21,9 @@ export interface JobView {
   videoPath: string;
   elapsedMs: number;
   notePath?: string | undefined;
+  transcriptPath?: string | undefined;
+  ocrPath?: string | undefined;
+  framesDir?: string | undefined;
   note?: string | undefined;
   warnings: string;
   error?: string | undefined;
@@ -31,6 +34,8 @@ export interface StartJobInput {
   preset?: string | undefined;
   outputDir?: string | undefined;
   formats?: ('md' | 'json' | 'html')[] | undefined;
+  vadEnabled?: boolean | undefined;
+  enhanceAudio?: boolean | undefined;
 }
 
 interface JobState {
@@ -42,6 +47,8 @@ interface JobState {
   preset: string | undefined;
   outputDir: string | undefined;
   formats: ('md' | 'json' | 'html')[] | undefined;
+  vadEnabled: boolean | undefined;
+  enhanceAudio: boolean | undefined;
   createdAt: number;
   startedAt: number | undefined;
   finishedAt: number | undefined;
@@ -83,6 +90,8 @@ export class JobRegistry {
       preset: input.preset,
       outputDir: input.outputDir,
       formats: input.formats,
+      vadEnabled: input.vadEnabled,
+      enhanceAudio: input.enhanceAudio,
       createdAt: Date.now(),
       startedAt: undefined,
       finishedAt: undefined,
@@ -148,12 +157,29 @@ export class JobRegistry {
       const services = this._getServices();
       await services.init();
 
+      const baseConfig = this.resolveConfig(services, job.preset) ?? {};
+      const transcriptionOverride: Partial<ProcessingConfig['transcription']> = {};
+      if (job.vadEnabled !== undefined) {
+        transcriptionOverride.enableVAD = job.vadEnabled;
+      }
+      if (job.enhanceAudio !== undefined) {
+        transcriptionOverride.enhanceAudio = job.enhanceAudio;
+      }
+
+      const mergedConfig: Partial<ProcessingConfig> = {
+        ...baseConfig,
+        transcription: {
+          ...(baseConfig.transcription ?? services.config.getVideoProcessingConfig().transcription),
+          ...transcriptionOverride,
+        },
+      };
+
       const context = services.createContext(job.jobId);
       const output = await services.analyzeVideo.execute(
         {
           videoPath: job.videoPath,
           outputDir: job.outputDir ?? services.defaultOutputDir,
-          config: this.resolveConfig(services, job.preset),
+          config: mergedConfig,
           ...(job.formats !== undefined ? { formats: job.formats } : {}),
           progressCallback: (progress: ProgressUpdate) => {
             job.percent = progress.percent;
@@ -215,6 +241,14 @@ function toView(job: JobState): JobView {
   if (output !== undefined) {
     const first = output.outputFiles[0];
     if (first !== undefined) view.notePath = first;
+
+    if (output.manifest) {
+      view.notePath = output.manifest.notes;
+      view.transcriptPath = output.manifest.transcript;
+      view.ocrPath = output.manifest.ocr;
+      view.framesDir = output.manifest.framesDir;
+    }
+
     view.note = previewNote(output);
   }
   if (job.error !== undefined) view.error = job.error;

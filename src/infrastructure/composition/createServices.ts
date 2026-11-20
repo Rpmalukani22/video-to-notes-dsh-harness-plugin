@@ -47,6 +47,17 @@ import {
   OpenAILLMProvider,
 } from '../adapters/CloudLLMProviders.js';
 import { CustomLLMProvider, OllamaLLMProvider } from '../adapters/LocalLLMProviders.js';
+import { TranscriptRenderer } from '../adapters/TranscriptRenderer.js';
+import { OCRRenderer } from '../adapters/OCRRenderer.js';
+import { FrameCopier } from '../adapters/FrameCopier.js';
+import { AudioEnhancer } from '../adapters/AudioEnhancer.js';
+import { NoteSynthesizer } from '../../application/services/NoteSynthesizer.js';
+import {
+  INoteSynthesizer,
+  SynthesisInput,
+  SynthesisOptions,
+  SynthesizedResult,
+} from '../../application/ports/Interfaces.js';
 
 /**
  * Composition root.
@@ -114,6 +125,26 @@ class DelegatingSummarizer implements ISummarizer {
   }
 }
 
+class DelegatingSynthesizer implements INoteSynthesizer {
+  private _delegate: INoteSynthesizer;
+
+  constructor(logger: ILogger) {
+    this._delegate = new NoteSynthesizer(
+      null,
+      { provider: 'none', temperature: 0.3, maxTokens: 2048, topP: 0.9 },
+      logger
+    );
+  }
+
+  use(delegate: INoteSynthesizer): void {
+    this._delegate = delegate;
+  }
+
+  synthesize(input: SynthesisInput, options?: SynthesisOptions): Promise<SynthesizedResult> {
+    return this._delegate.synthesize(input, options);
+  }
+}
+
 export class Services {
   readonly logger: ILogger;
   readonly metrics: IMetricsCollector;
@@ -121,12 +152,17 @@ export class Services {
   readonly config: IConfigurationProvider;
   readonly secrets: ISecretProvider;
   readonly renderer: MarkdownNoteRenderer;
+  readonly rawTranscriptRenderer: TranscriptRenderer;
+  readonly rawOcrRenderer: OCRRenderer;
+  readonly frameCopier: FrameCopier;
+  readonly audioEnhancer: AudioEnhancer;
   readonly analyzeVideo: AnalyzeVideo;
   readonly batchProcess: BatchProcess;
   readonly defaultOutputDir: string;
 
   private readonly _options: VideoToNotesServiceConfig;
   private readonly _summarizer: DelegatingSummarizer;
+  private readonly _synthesizer: DelegatingSynthesizer;
   private _llm: ILLMProvider | null = null;
   private _initPromise: Promise<void> | null = null;
   private _disposed = false;
@@ -146,7 +182,12 @@ export class Services {
     this.config = new YamlConfigProvider(this.logger);
     this.secrets = new EnvSecretProvider();
     this.renderer = new MarkdownNoteRenderer();
+    this.rawTranscriptRenderer = new TranscriptRenderer();
+    this.rawOcrRenderer = new OCRRenderer();
+    this.frameCopier = new FrameCopier(this.logger);
+    this.audioEnhancer = new AudioEnhancer(options.ffmpegPath ?? 'ffmpeg', this.logger, this.metrics);
     this._summarizer = new DelegatingSummarizer();
+    this._synthesizer = new DelegatingSynthesizer(this.logger);
 
     const ffmpeg = options.ffmpegPath ?? 'ffmpeg';
     const logger = this.logger;
@@ -176,6 +217,11 @@ export class Services {
       configProvider: this.config,
       metrics,
       logger,
+      rawTranscriptRenderer: this.rawTranscriptRenderer,
+      rawOcrRenderer: this.rawOcrRenderer,
+      frameCopier: this.frameCopier,
+      audioEnhancer: this.audioEnhancer,
+      synthesizer: this._synthesizer,
     });
 
     this.batchProcess = new BatchProcess(this.analyzeVideo, this.config, this.checkpoint, metrics, logger);
@@ -197,19 +243,27 @@ export class Services {
     const provider = this.config as YamlConfigProvider;
     await provider.load(this._options.configPath);
 
-    const llmConfig = this.mergeLlmConfig(this.config.getLLMConfig());
+    let llmConfig = this.mergeLlmConfig(this.config.getLLMConfig());
+
+    // Auto-detect harness LLM bridge if configured as none or unspecified
+    if (llmConfig.provider === 'none' && this._options.harnessBridge) {
+      this.logger.info('Auto-detected DeepSeek Harness LLM service; upgrading provider to harness');
+      llmConfig = { ...llmConfig, provider: 'harness' };
+    }
 
     if (llmConfig.provider === 'none') {
-      this.logger.debug('LLM summarisation disabled; using the offline extractive summariser');
+      this.logger.debug('LLM summarisation disabled; using offline extractive summariser & synthesizer');
       this._llm = null;
       this._summarizer.use(new ExtractiveSummarizer());
+      this._synthesizer.use(new NoteSynthesizer(null, llmConfig, this.logger));
       return;
     }
 
     const adapter = await this.createLlmAdapter(llmConfig);
     this._llm = adapter;
     this._summarizer.use(new LLMSummarizer(adapter, llmConfig, this.logger));
-    this.logger.info('LLM summarisation enabled', { provider: llmConfig.provider });
+    this._synthesizer.use(new NoteSynthesizer(adapter, llmConfig, this.logger));
+    this.logger.info('LLM summarisation & synthesis enabled', { provider: llmConfig.provider });
   }
 
   private mergeLlmConfig(base: LLMConfig): LLMConfig {

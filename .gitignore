@@ -87,6 +87,7 @@ logs/
 # Models and outputs (large files)
 models/
 output/
+notes/
 *.bin
 
 # Test results

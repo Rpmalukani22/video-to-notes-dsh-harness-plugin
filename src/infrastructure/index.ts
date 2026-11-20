@@ -22,6 +22,10 @@ export * from './adapters/JsonCheckpointStore.js';
 export * from './adapters/YamlConfigProvider.js';
 export * from './adapters/EnvSecretProvider.js';
 export * from './adapters/MarkdownNoteRenderer.js';
+export * from './adapters/TranscriptRenderer.js';
+export * from './adapters/OCRRenderer.js';
+export * from './adapters/FrameCopier.js';
+export * from './adapters/AudioEnhancer.js';
 export * from './adapters/SimpleResourcePool.js';
 
 export * from './composition/createServices.js';

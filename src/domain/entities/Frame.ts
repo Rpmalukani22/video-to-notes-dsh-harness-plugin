@@ -100,6 +100,10 @@ export class Frame {
     this._processedAt = new Date();
   }
 
+  setImagePath(imagePath: string): void {
+    (this as unknown as { _imagePath: string | null })._imagePath = imagePath;
+  }
+
   setSceneId(sceneId: string): void {
     this._sceneId = sceneId;
   }

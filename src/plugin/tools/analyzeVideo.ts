@@ -37,6 +37,14 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
           type: 'string',
           description: 'Comma-separated output formats: md, json, html. Defaults to md.',
         },
+        vadEnabled: {
+          type: 'boolean',
+          description: 'Enable Voice Activity Detection (VAD). Defaults to true. Set to false if background noise or fans are cutting off speech.',
+        },
+        enhanceAudio: {
+          type: 'boolean',
+          description: 'Apply FFmpeg noise reduction and dynamic normalization before speech recognition. Useful when background fan/noise is audible.',
+        },
       },
       output: {
         schema: {
@@ -61,12 +69,16 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
             ? assertAbsoluteDir(args.outputDir, 'outputDir')
             : undefined;
         const formats = parseFormats(args.formats);
+        const vadEnabled = args.vadEnabled !== undefined ? Boolean(args.vadEnabled) : undefined;
+        const enhanceAudio = args.enhanceAudio !== undefined ? Boolean(args.enhanceAudio) : undefined;
 
         const jobId = runtime.jobs.start({
           videoPath,
           preset: args.preset ?? 'lecture',
           ...(outputDir !== undefined ? { outputDir } : {}),
           ...(formats !== undefined ? { formats } : {}),
+          ...(vadEnabled !== undefined ? { vadEnabled } : {}),
+          ...(enhanceAudio !== undefined ? { enhanceAudio } : {}),
         });
 
         return { jobId, status: 'accepted' as const };

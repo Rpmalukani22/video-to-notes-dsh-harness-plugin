@@ -12,11 +12,21 @@ processing:
     fastIntervalSec: 20
     enableRegionDetection: false
   ocr:
-    # Disable OCR - user doesn't want OCR in notes
-    enabled: false
+    psm: auto
+    languages:
+      - eng
+    confidenceThreshold: 0.5
+    superResolution: false
+    codeDetection: false
+    regionAware: false
   transcription:
-    # Disable transcription - user doesn't want transcripts in notes
-    enabled: false
+    model: base.int8
+    enableVAD: true
+    wordTimestamps: true
+    enableEscalation: true
+    escalationThreshold: 0.6
+    maxEscalations: 1
+    enhanceAudio: false
   note:
     template: default
     outputFormats: ['md']

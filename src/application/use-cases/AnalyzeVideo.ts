@@ -23,6 +23,12 @@ import {
   PipelineContext,
   ProcessingConfig,
   AudioFile,
+  OutputFileManifest,
+  IRawTranscriptRenderer,
+  IRawOCRRenderer,
+  IFrameCopier,
+  IAudioEnhancer,
+  INoteSynthesizer,
 } from '../ports/Interfaces.js';
 import { ISummarizer } from '../services/Summarizer.js';
 
@@ -60,6 +66,7 @@ export interface AnalyzeVideoOutput {
   video: Video;
   processingTimeMs: number;
   outputFiles: string[];
+  manifest?: OutputFileManifest;
   /** Non-fatal degradations worth surfacing to the user (missing tools, etc.). */
   warnings: string[];
 }
@@ -81,6 +88,11 @@ export interface AnalyzeVideoDeps {
   ffmpegPool?: IResourcePool<unknown> | undefined;
   whisperPool?: IResourcePool<unknown> | undefined;
   tesseractPool?: IResourcePool<unknown> | undefined;
+  rawTranscriptRenderer?: IRawTranscriptRenderer | undefined;
+  rawOcrRenderer?: IRawOCRRenderer | undefined;
+  frameCopier?: IFrameCopier | undefined;
+  audioEnhancer?: IAudioEnhancer | undefined;
+  synthesizer?: INoteSynthesizer | undefined;
 }
 
 const supportedFormats = new Set(['md', 'json', 'html']);
@@ -134,7 +146,31 @@ export class AnalyzeVideo {
 
     // ---- 4. Transcription --------------------------------------------------
     this.emitProgress(input, { stage: 'transcription', percent: 34, current: 'Transcribing audio', etaSeconds: 90, throughput: '' });
-    const transcript = await this.transcribe(video, audio, config, signal, warnings);
+    let transcript = await this.transcribe(video, audio, config, signal, warnings);
+
+    const hasAudio = audio !== null && audio.duration > 3;
+    const emptyTranscript = transcript.segments.length === 0;
+
+    if (hasAudio && emptyTranscript) {
+      if (config.transcription.enableVAD) {
+        warnings.push('VAD_EMPTY_TRANSCRIPT: Audio was present but VAD produced empty transcript. You can specify vadEnabled: false to retry without VAD or enable audio enhancement.');
+      } else {
+        warnings.push('EMPTY_TRANSCRIPT: No speech detected in audio.');
+      }
+
+      if (config.transcription.enhanceAudio && this._deps.audioEnhancer) {
+        this.emitProgress(input, { stage: 'transcription', percent: 38, current: 'Enhancing audio and retrying transcription', etaSeconds: 60, throughput: '' });
+        this._deps.logger.info('VAD/audio noise suspected. Running ffmpeg audio enhancement...');
+        try {
+          const workDir = join(outputDir, '.work', video.id);
+          await mkdir(workDir, { recursive: true });
+          const enhancedAudio = await this._deps.audioEnhancer.enhance(audio, workDir, signal);
+          transcript = await this.transcribe(video, enhancedAudio, config, signal, warnings);
+        } catch (enhErr) {
+          this._deps.logger.warn('Audio enhancement retry failed', { error: describe(enhErr) });
+        }
+      }
+    }
     video.setTranscript(transcript);
 
     // ---- 5. OCR ------------------------------------------------------------
@@ -164,27 +200,83 @@ export class AnalyzeVideo {
       sections = [buildFallbackSection(video, transcript, frames)];
     }
 
-    // ---- 9. Summarisation --------------------------------------------------
-    this.emitProgress(input, { stage: 'summarization', percent: 86, current: 'Summarising', etaSeconds: 20, throughput: '' });
-    const summarized = await this._deps.summarizer.summarize(sections, {
-      detailLevel: config.note.detailLevel,
-      signal,
-    });
+    // ---- 8.5 Screenshots & Key Frames --------------------------------------
+    let keyFramePaths = new Map<string, string>();
+    const framesDir = join(outputDir, `${baseName}_frames`);
+    if (this._deps.frameCopier) {
+      this.emitProgress(input, { stage: 'frames', percent: 81, current: 'Saving screenshots', etaSeconds: 5, throughput: '' });
+      keyFramePaths = await this._deps.frameCopier.copyKeyFrames(frames, outputDir, baseName, 20);
+    }
+
+    // ---- 8.6 Render Raw Transcript & Raw OCR -------------------------------
+    const transcriptPath = join(outputDir, `${baseName}_transcript.md`);
+    const ocrPath = join(outputDir, `${baseName}_ocr.md`);
+
+    if (this._deps.rawTranscriptRenderer) {
+      await this._deps.rawTranscriptRenderer.render(transcript, transcriptPath, video);
+    }
+
+    if (this._deps.rawOcrRenderer) {
+      await this._deps.rawOcrRenderer.render(frames, ocrPath, video);
+    }
+
+    // ---- 9. Synthesis & Summarization --------------------------------------
+    this.emitProgress(input, { stage: 'summarization', percent: 86, current: 'Synthesizing notes', etaSeconds: 20, throughput: '' });
+    let finalSections: NoteSection[];
+
+    if (this._deps.synthesizer) {
+      const synthResult = await this._deps.synthesizer.synthesize(
+        {
+          video,
+          transcript,
+          frames,
+          scenes,
+          alignedBlocks,
+          keyFramePaths,
+          sections,
+        },
+        {
+          detailLevel: config.note.detailLevel,
+          enableValidation: true,
+          signal,
+        }
+      );
+      finalSections = synthResult.sections;
+      if (synthResult.validations.length > 0) {
+        warnings.push(`Detected ${synthResult.validations.length} concept clarification(s)/correction(s) during synthesis.`);
+      }
+    } else {
+      finalSections = await this._deps.summarizer.summarize(sections, {
+        detailLevel: config.note.detailLevel,
+        signal,
+      });
+    }
     this.throwIfAborted(signal);
 
     // ---- 10. Note + render -------------------------------------------------
     this.emitProgress(input, { stage: 'rendering', percent: 94, current: 'Writing notes', etaSeconds: 5, throughput: '' });
     const processingTimeMs = Date.now() - pipelineStart;
-    const note = this.createNote(video, summarized, config, processingTimeMs);
+    const note = this.createNote(video, finalSections, config, processingTimeMs);
     const formats = this.resolveFormats(input.formats, config);
-    const outputFiles = await this.render(note, outputDir, baseName, formats);
+    const noteFiles = await this.render(note, outputDir, baseName, formats);
+
+    const primaryNotePath = noteFiles[0] ?? join(outputDir, `${baseName}.md`);
+    const manifest: OutputFileManifest = {
+      transcript: transcriptPath,
+      ocr: ocrPath,
+      notes: primaryNotePath,
+      framesDir,
+      all: [primaryNotePath, transcriptPath, ocrPath, ...noteFiles.slice(1)],
+    };
+
+    const outputFiles = [primaryNotePath, transcriptPath, ocrPath, ...noteFiles.slice(1)];
 
     this._deps.metrics.recordHistogram('video_analysis_duration_ms', Date.now() - startedAt, { preset: config.frameExtraction.preset });
     this._deps.metrics.incrementCounter('videos_analyzed');
 
     this.emitProgress(input, { stage: 'complete', percent: 100, current: 'Done', etaSeconds: 0, throughput: '' });
 
-    return { note, video, processingTimeMs, outputFiles, warnings };
+    return { note, video, processingTimeMs, outputFiles, manifest, warnings };
   }
 
   // -------------------------------------------------------------------------
