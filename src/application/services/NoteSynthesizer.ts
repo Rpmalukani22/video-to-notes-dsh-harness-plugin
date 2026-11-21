@@ -14,6 +14,7 @@ import { formatCorrection } from '../../domain/services/CorrectionFormatter.js';
 import { checkCoverage } from '../../domain/services/CoverageChecker.js';
 import { stripRawMarkers } from '../../domain/services/MarkerGuard.js';
 import { matchScreenshots } from '../../domain/services/ScreenshotMatcher.js';
+import { selectTimelineScreenshots } from '../../domain/services/ScreenshotSelector.js';
 import { emptyCoverageCounts } from '../../domain/entities/ValidationFinding.js';
 import {
   assertCloudLlmAllowed,
@@ -72,7 +73,7 @@ export class NoteSynthesizer implements INoteSynthesizer {
           ? await this.reduceOnce(input, wrapped, screenshotMap, options)
           : await this.mapThenReduce(input, evidence, screenshotMap, options);
 
-      const sections = this.attachScreenshots(rawSections, screenshotMap);
+      const sections = this.attachScreenshots(rawSections, input);
       // Coverage is measured on the LLM prose only. The verbatim gap appendix is
       // rendered once by buildValidationSection in AnalyzeVideo, so gaps are
       // never re-counted as "covered" by their own appendix text.
@@ -127,9 +128,17 @@ export class NoteSynthesizer implements INoteSynthesizer {
         options
       );
       const revised = stripRawMarkers(response.trim());
-      return revised.length > 0
-        ? [{ ...sections[0]!, content: revised }, ...sections.slice(1)]
-        : sections;
+      if (revised.length === 0) return sections;
+      // Repair replaces the prose but must keep the screenshot embeds already
+      // attached to the first section.
+      const originalEmbeds = sections[0]!.content
+        .split('\n')
+        .filter(line => line.startsWith('!['))
+        .join('\n');
+      const content = originalEmbeds.length > 0
+        ? `${originalEmbeds}\n\n${revised}`
+        : revised;
+      return [{ ...sections[0]!, content }, ...sections.slice(1)];
     } catch (error) {
       if (options.signal?.aborted) throw error;
       this._logger.warn('Validation repair failed; keeping pre-repair notes', {
@@ -272,15 +281,17 @@ export class NoteSynthesizer implements INoteSynthesizer {
     return { sections, gapCounts: emptyCoverageCounts(), gaps: [], degraded: true };
   }
 
-  private attachScreenshots(
-    sections: NoteSection[],
-    screenshots: Map<string, string | null>
-  ): NoteSection[] {
-    // The reduce step returns a single new section id, so match by the chosen
-    // screenshot paths rather than the original section ids.
-    const images = [...new Set([...screenshots.values()].filter(
-      (path): path is string => typeof path === 'string' && path.length > 0
-    ))].slice(0, 2);
+  private attachScreenshots(sections: NoteSection[], input: SynthesisInput): NoteSection[] {
+    // The reduce step returns one new section id, so choose embeds from the
+    // timeline-selected frames rather than the original section ids. This
+    // keeps first/last screenshots near the ends of the video.
+    const selected = selectTimelineScreenshots(input.frames, {
+      maxScreenshots: Math.min(6, input.frames.length),
+      durationMs: input.video.duration.milliseconds,
+    });
+    const images = [...new Set(selected
+      .map(frame => input.keyFramePaths.get(frame.id))
+      .filter((path): path is string => typeof path === 'string' && path.length > 0))];
     if (images.length === 0 || sections.length === 0) return sections;
     const embeds = images.map(path => `![Key slide](${path})`).join('\n\n');
     return sections.map((section, index) =>

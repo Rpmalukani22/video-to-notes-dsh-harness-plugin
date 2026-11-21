@@ -20,6 +20,8 @@ if ($Provider -eq 'real' -and [string]::IsNullOrWhiteSpace($env:VTN_REAL_LLM_PRO
 
 $stubProcess = $null
 try {
+  $callLog = "test-results\stub-calls.log"
+  Remove-Item $callLog -ErrorAction SilentlyContinue
   if ($Provider -eq 'stub') {
     $stubProcess = Start-Process -PassThru node -ArgumentList 'scripts\stub-llm-server.js' -WindowStyle Hidden
     Start-Sleep -Seconds 1
@@ -37,9 +39,15 @@ try {
   if (-not (Test-Path $notes)) { throw 'LLM E2E did not write sample_notes.md' }
   $content = Get-Content $notes -Raw
   if ($content -notmatch '\*\*') { throw 'LLM notes contain no bold formatting' }
+  if ($content -notmatch '## Validation & Accuracy') { throw 'LLM notes contain no validation section' }
+  if ($content -notmatch '!\[.*\]\(') { throw 'LLM notes contain no screenshot embeds' }
   if (@(Get-ChildItem $tmp -Filter *.md -File).Count -ne 3) { throw 'LLM E2E did not write exactly three markdown files' }
+  $calls = if (Test-Path $callLog) { @(Get-Content $callLog) } else { @() }
+  if ($Provider -eq 'stub' -and $calls.Count -lt 2) { throw "stub call count too low: $($calls.Count)" }
 
-  Write-Output "LLM E2E OK ($Provider): notes, transcript and OCR written"
+  $record = "LLM E2E OK ($Provider): three artifacts, validation section, embeds; stub calls=$($calls.Count)"
+  Write-Output $record
+  Add-Content $evalDoc $record
 } finally {
   if ($stubProcess -ne $null -and -not $stubProcess.HasExited) { Stop-Process -Id $stubProcess.Id -Force }
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 // Deterministic OpenAI-compatible stub used by the offline LLM E2E path.
 import { createServer } from 'node:http';
+import { appendFileSync, mkdirSync } from 'node:fs';
+
+const LOG_DIR = 'test-results';
+const LOG_FILE = `${LOG_DIR}/stub-calls.log`;
+mkdirSync(LOG_DIR, { recursive: true });
+function logCall(kind) {
+  try { appendFileSync(LOG_FILE, `${kind}\n`); } catch { /* best effort */ }
+}
 
 const PORT = Number(process.env.VTN_STUB_PORT ?? 4399);
 const SENTINEL = 'Return your findings as VALIDATION_RESULT JSON conforming to the schema.';
@@ -35,6 +43,7 @@ function seeded(prompt) {
 const server = createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
   if (req.method === 'GET' && req.url === '/v1/models') {
+    logCall('models');
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'stub-v1', object: 'model' }] }));
     return;
   }
@@ -49,6 +58,7 @@ const server = createServer((req, res) => {
       } catch {
         // fall back to the raw body
       }
+      logCall(prompt.includes(SENTINEL) ? 'validation' : 'synthesis');
       res.end(JSON.stringify(chatCompletion(seeded(prompt))));
     });
     return;

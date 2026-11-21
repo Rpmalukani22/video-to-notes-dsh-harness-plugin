@@ -84,12 +84,4 @@ describe('seeded accuracy eval', () => {
     expect(report.gaps).toHaveLength(0);
   });
 
-  it('branches on the real-provider switch', () => {
-    const realMode = process.env.VTN_REAL_LLM_PROVIDER !== undefined;
-    if (realMode) {
-      expect(process.env.VTN_REAL_LLM_PROVIDER).toBeTruthy();
-    } else {
-      expect(realMode).toBe(false);
-    }
-  });
 });
