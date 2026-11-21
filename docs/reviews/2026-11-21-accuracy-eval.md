@@ -26,7 +26,7 @@ T24 Step 2 (copying the updated `skills/*/SKILL.md` into `C:\Users\ruchi\.dsh\sk
 
 - `npx tsc --noEmit` — exit 0.
 - `npm run build` — exit 0.
-- `npx vitest run` — 35 files, 144 tests passed.
+- `npx vitest run` — 35 files, 145 tests passed.
 - Seeded eval now drives `LLMNoteValidator.validate` with a scripted provider whose basis is present in the OCR fixture; TP/FP/FN are derived from the validator output, not a hand-built correction. A negative seed (fabricated basis) is rejected and downgraded to a Check item.
 - `scripts/e2e-check.ps1` — `E2E OK: sample_notes.md, sample_ocr.md, sample_transcript.md`; exactly three markdown files, screenshots folder non-empty, negative control detected the seeded marker.
 - `scripts/e2e-check-llm.ps1 -Provider stub` — asserts three markdown files, bold formatting, `## Validation & Accuracy`, screenshot embeds, ≥2 stub endpoint calls and a `validation` line in the stub call log; appends its result to this file. It does **not** assert factual accuracy of the generated notes.

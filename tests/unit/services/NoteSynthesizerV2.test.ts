@@ -95,6 +95,16 @@ describe('NoteSynthesizer v2', () => {
     expect(result.gaps.length).toBe(result.gapCounts.gapTotal);
   });
 
+  it('embeds each screenshot only once in extractive notes', async () => {
+    const p = provider(() => { throw new Error('offline'); });
+    const result = await new NoteSynthesizer(p, LLM_CONFIG, logger).synthesize(input(), {
+      privacy: 'local-only',
+    });
+    const text = result.sections.map(s => s.content).join('\n');
+    const embeds = [...text.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map(match => match[1]!);
+    expect(new Set(embeds).size).toBe(embeds.length);
+  });
+
   it('retries a transient failure and then succeeds', async () => {
     let attempts = 0;
     const stub = provider(() => { attempts++; if (attempts === 1) throw new Error('503 service unavailable'); return '# Notes'; });

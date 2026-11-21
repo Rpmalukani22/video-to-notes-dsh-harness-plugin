@@ -281,8 +281,14 @@ export class NoteSynthesizer implements INoteSynthesizer {
 
   private extractiveResult(input: SynthesisInput, reason: string): SynthesizedResult {
     const screenshots = matchScreenshots(input.sections, input.frames, input.keyFramePaths);
+    const usedImages = new Set<string>();
     const sections = input.sections.map(section => {
-      const image = screenshots.get(section.id);
+      const matched = screenshots.get(section.id);
+      // Each screenshot is embedded at most once, next to the first section it
+      // illustrates. Repeated embeddings made the notes unreadable.
+      const image = matched !== null && matched !== undefined && !usedImages.has(matched)
+        ? matched : null;
+      if (image !== null) usedImages.add(image);
       const heading = image ? `![Key slide](${image})\n\n` : '';
       const sentences = rankSentences(stripRawMarkers(section.content).replace(/\*\*/g, ''), 8);
       const bullets = sentences.map(
