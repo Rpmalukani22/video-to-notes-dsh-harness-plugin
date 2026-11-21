@@ -37,12 +37,17 @@ Screenshots are saved to `[video]_frames/`. This folder is a supporting asset, n
    ```
    - Save the returned `jobId`.
 
-3. **POLL UNTIL COMPLETE — THIS IS THE STEP THAT IS COMMONLY MISSED.**
-   Call `video_note_status({ "jobId": "<jobId from step 2>" })` repeatedly.
-   - While `status` is `queued` or `running`, keep polling (do not answer the user yet).
+3. **WAIT UNTIL COMPLETE — THIS IS THE STEP THAT IS COMMONLY MISSED.**
+   Preferred: one blocking call (the tool supports it):
+   ```json
+   { "jobId": "<jobId from step 2>", "wait": "true", "timeout_ms": "600000" }
+   ```
+   `wait: "true"` blocks until the job reaches `completed` or `failed`, or until `timeout_ms` elapses (max 3,600,000 ms). If the result says `timedOut: true`, call it again with the same `jobId`.
+   - You may also poll without `wait`, but never answer the user while `status` is `queued` or `running`.
    - Stop only when `status` is `completed` or `failed`.
    - Never report success, paths, or "done" based only on the `analyze_video` response — that call only means the job was accepted.
    - If `status` is `failed`, report the `error` field and `warnings`. Do not claim notes were generated.
+   - A model `429 Too Many Requests` from the harness is unrelated to this job; retry the status call after the indicated delay rather than assuming the video job failed.
 
 4. **Verify the completed result before answering the user.** From the `video_note_status` output check that:
    - `notesPath`, `transcriptPath` and `ocrPath` are all present and non-empty;
@@ -76,6 +81,6 @@ When the user mentions Hinglish, Hindi or another non-English language, pass the
 
 ```text
 analyze_video(videoPath) -> jobId
-video_note_status(jobId) -> queued | running | completed | failed   [POLL]
+video_note_status(jobId, wait: "true", timeout_ms: "600000") -> completed | failed  [BLOCKS]
 completed -> notesPath + transcriptPath + ocrPath + framesDir + notes
 ```
