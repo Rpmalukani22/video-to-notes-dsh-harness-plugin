@@ -45,9 +45,10 @@ const VALIDATION_SENTINEL =
   'Return your findings as VALIDATION_RESULT JSON conforming to the schema.';
 
 /**
- * Independent, stateless accuracy reviewer. A separate LLM invocation with its
- * own prompt and optionally a different model; it never shares the synthesis
- * conversation state. Every non-abort failure degrades instead of failing the run.
+ * Independent, stateless accuracy reviewer: a separate LLM invocation with its
+ * own prompt that never shares the synthesis conversation state. `validation.model`
+ * is a metrics label only in this build; the injected provider performs the call.
+ * Every non-abort failure degrades instead of failing the run.
  */
 export class LLMNoteValidator implements INoteValidator {
   constructor(

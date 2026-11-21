@@ -31,7 +31,7 @@ export function parseCorrection(line: string): Correction | null {
 }
 
 export function formatCheck(claim: string): string {
-  return `> ❓ **Check:** ${claim} — insufficient evidence in transcript/OCR.`;
+  return `> ❓ **Check:** ${escapeAttribute(stripRawMarkers(claim))} — insufficient evidence in transcript/OCR.`;
 }
 
 export function dedupeCorrections(list: Correction[]): Correction[] {

@@ -71,7 +71,6 @@ export class NoteSynthesizer implements INoteSynthesizer {
 
     try {
       const evidence = this.buildEvidence(input);
-      const screenshotMap = matchScreenshots(input.sections, input.frames, input.keyFramePaths);
       const wrapped = wrapUntrustedEvidence(evidence.transcript, evidence.ocr, evidence.language);
 
       const contextTokens = this._provider?.getModelInfo().maxContextTokens ?? 8192;
@@ -257,7 +256,7 @@ export class NoteSynthesizer implements INoteSynthesizer {
           {
             role: 'user',
             content:
-              `${wrapUntrustedBlock('mapped-notes', mapped.join('\n\n'))}\n\nFull source inventory: ${input.transcript.segments.length} transcript segments, ` +
+              `${wrapUntrustedBlock('mapped-notes', mapped.join('\n\n').slice(0, inputBudgetTokens * CHARS_PER_TOKEN_ESTIMATE))}\n\nFull source inventory: ${input.transcript.segments.length} transcript segments, ` +
               `${input.frames.filter(frame => frame.hasOCR()).length} OCR frames, language ${evidence.language}. ` +
               `Write the final combined notes in Markdown.`,
           },
