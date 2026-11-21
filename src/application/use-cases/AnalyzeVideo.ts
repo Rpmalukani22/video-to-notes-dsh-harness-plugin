@@ -1,5 +1,5 @@
-import { join, basename, extname } from 'path';
-import { mkdir, rm } from 'fs/promises';
+import { join, basename, extname, dirname } from 'path';
+import { mkdir, rm, rmdir } from 'fs/promises';
 import type { VideoMetadata } from '../../domain/entities/Video.js';
 import { Video } from '../../domain/entities/Video.js';
 import type { Frame } from '../../domain/entities/Frame.js';
@@ -490,6 +490,15 @@ export class AnalyzeVideo {
         const message = `Could not remove intermediate audio files in ${dir}: ${describe(error)}`;
         warnings.push(message);
         this._deps.logger.warn(message);
+      }
+    }
+    // Remove the empty `.work` parents too (non-recursive, so a concurrent job's
+    // files are never touched).
+    for (const parent of new Set(dirs.map(dirname))) {
+      try {
+        await rmdir(parent);
+      } catch {
+        // Non-empty (another job is running) or already gone — safe to ignore.
       }
     }
   }

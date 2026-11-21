@@ -34,6 +34,8 @@ describe('Intermediate audio cleanup', () => {
 
       await expect(stat(workDir)).rejects.toThrow();
       await expect(stat(legacyDir)).rejects.toThrow();
+      await expect(stat(join(root, '.work'))).rejects.toThrow();
+      await expect(stat(join(root, 'legacy', '.work'))).rejects.toThrow();
       expect(await stat(join(keepDir, 'notes.md'))).toBeDefined();
       expect(warnings).toHaveLength(0);
     } finally {
