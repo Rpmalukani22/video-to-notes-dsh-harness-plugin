@@ -9,6 +9,7 @@ import type { AggregatedSection } from '../../domain/services/ContentAggregator.
 import type { ZodTypeAny, infer as ZodInfer } from 'zod';
 import type {
   CoverageCounts,
+  CoverageGap,
   NoteValidationResult,
 } from '../../domain/entities/ValidationFinding.js';
 
@@ -257,6 +258,7 @@ export interface SynthesisOptions {
 export interface SynthesizedResult {
   sections: NoteSection[];
   gapCounts: CoverageCounts;
+  gaps: CoverageGap[];
   degraded: boolean;
 }
 

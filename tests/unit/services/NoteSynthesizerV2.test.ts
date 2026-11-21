@@ -4,6 +4,7 @@ import { LLMNoteValidator } from '../../../src/application/services/NoteValidato
 import { ConsoleLogger } from '../../../src/infrastructure/adapters/ConsoleLogger.js';
 import type { ILLMProvider, SynthesisInput, LLMConfig } from '../../../src/application/ports/Interfaces.js';
 import type { NoteSection } from '../../../src/domain/entities/Note.js';
+import { Timestamp } from '../../../src/domain/value-objects/Timestamp.js';
 import { frameAt, segment, transcript, video } from '../../helpers/fixtures.js';
 
 const LLM_CONFIG: LLMConfig = { provider: 'deepseek', temperature: 0.2, maxTokens: 2048, topP: 0.9 };
@@ -77,6 +78,21 @@ describe('NoteSynthesizer v2', () => {
     expect(result.sections[0]!.content).not.toContain('**Visual Content:**');
     expect(result.sections[0]!.content).toContain('**bold**');
     expect(result.degraded).toBe(false);
+  });
+
+  it('embeds screenshots on the LLM path and reports gaps without re-counting the appendix', async () => {
+    const p = provider(() => '# Notes\n**index scans** are fast');
+    const sample = input();
+    const withPaths: SynthesisInput = {
+      ...sample,
+      sections: sample.sections.map(s => ({ ...s, timestamp: Timestamp.fromMilliseconds(5000) })),
+      keyFramePaths: new Map([['f1', 'lecture_frames/frame_01.jpg']]),
+    };
+    const result = await new NoteSynthesizer(p, LLM_CONFIG, logger).synthesize(withPaths, {
+      privacy: 'cloud-opt-in',
+    });
+    expect(result.sections[0]!.content).toContain('![Key slide](lecture_frames/frame_01.jpg)');
+    expect(result.gaps.length).toBe(result.gapCounts.gapTotal);
   });
 
   it('retries a transient failure and then succeeds', async () => {

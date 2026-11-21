@@ -9,7 +9,12 @@ import type {
 } from '../ports/Interfaces.js';
 import type { NoteValidationResult } from '../../domain/entities/ValidationFinding.js';
 import { verifyBasis } from '../../domain/services/BasisVerifier.js';
-import { assertCloudLlmAllowed, PrivacyGateError, wrapUntrustedEvidence } from './llmSafety.js';
+import {
+  assertCloudLlmAllowed,
+  PrivacyGateError,
+  wrapUntrustedEvidence,
+  wrapUntrustedBlock,
+} from './llmSafety.js';
 
 const validationSchema = z.object({
   missingTranscript: z.array(
@@ -61,12 +66,15 @@ export class LLMNoteValidator implements INoteValidator {
     input: ValidationInput,
     options: ValidationOptions = {}
   ): Promise<NoteValidationResult> {
-    const independentModel = options.model?.model ?? this._config.model ?? 'unknown';
-    const provider = options.model?.provider ?? this._config.provider ?? 'none';
+    // The call uses the injected provider; a configured validation model is a
+    // label only, not a second provider instance. Privacy gating must therefore
+    // use the actual adapter provider.
+    const provider = this._config.provider ?? 'none';
+    const requestedModel = options.model?.model ?? this._config.model ?? 'unknown';
     this._metrics?.recordHistogram('validation_subagent_calls', 1, {
       provider,
-      model: independentModel,
-      independent: options.model !== undefined ? 'true' : 'false',
+      model: requestedModel,
+      independent: 'prompt-only',
     });
 
     const degraded = (): NoteValidationResult => ({
@@ -77,7 +85,7 @@ export class LLMNoteValidator implements INoteValidator {
       degraded: true,
     });
 
-    if (this._provider === null || provider === 'none' || provider === 'stub') return degraded();
+    if (this._provider === null || provider === 'none') return degraded();
     try {
       assertCloudLlmAllowed(this._privacy, provider);
     } catch (error) {
@@ -111,7 +119,7 @@ export class LLMNoteValidator implements INoteValidator {
           messages: [
             {
               role: 'user',
-              content: `Notes:\n${input.notes}\n\n${evidence}\n\n${VALIDATION_SENTINEL}`,
+              content: `${wrapUntrustedBlock('notes', input.notes)}\n\n${evidence}\n\n${VALIDATION_SENTINEL}`,
             },
           ],
           temperature: 0.1,
@@ -121,15 +129,27 @@ export class LLMNoteValidator implements INoteValidator {
         { signal: options.signal, timeoutMs: this._config.performance?.timeoutMs }
       );
 
-      const corrections = result.corrections
-        .filter(correction => verifyBasis(correction, input.transcript, input.frames))
-        .slice(0, this._maxCorrections);
+      const verified = result.corrections.filter(correction =>
+        verifyBasis(correction, input.transcript, input.frames)
+      );
+      const unverified = result.corrections.filter(correction =>
+        !verifyBasis(correction, input.transcript, input.frames)
+      );
+      const incomplete = [...result.incomplete];
+      if (this._abstain) {
+        for (const correction of unverified) {
+          incomplete.push({
+            topic: correction.instructorSaid,
+            detail: `unverified basis "${correction.basisQuote}"`,
+          });
+        }
+      }
 
       return {
         missingTranscript: result.missingTranscript,
         missingOcr: result.missingOcr,
-        corrections,
-        incomplete: result.incomplete,
+        corrections: verified.slice(0, this._maxCorrections),
+        incomplete,
         degraded: false,
       };
     } catch (error) {

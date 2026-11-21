@@ -39,10 +39,11 @@ import type {
 } from '../ports/Interfaces.js';
 import type { ISummarizer } from '../services/Summarizer.js';
 import { buildValidationSection } from '../../domain/services/CorrectionFormatter.js';
+import { assertNoRawMarkers } from '../../domain/services/MarkerGuard.js';
 import { normalizeTranscriptionConfig } from '../services/normalizeTranscriptionConfig.js';
 import { checkCoverage } from '../../domain/services/CoverageChecker.js';
 import { emptyCoverageCounts } from '../../domain/entities/ValidationFinding.js';
-import type { NoteValidationResult } from '../../domain/entities/ValidationFinding.js';
+import type { CoverageGap, NoteValidationResult } from '../../domain/entities/ValidationFinding.js';
 
 /**
  * AnalyzeVideo use case - orchestrates the full video -> notes pipeline.
@@ -330,6 +331,7 @@ export class AnalyzeVideo {
     };
     let finalSections: NoteSection[];
     let counts = emptyCoverageCounts();
+    let gaps: CoverageGap[] = [];
 
     if (this._deps.synthesizer) {
       const synthResult = await this._deps.synthesizer.synthesize(synthesisInput, {
@@ -340,6 +342,7 @@ export class AnalyzeVideo {
       });
       finalSections = synthResult.sections;
       counts = synthResult.gapCounts;
+      gaps = synthResult.gaps;
       if (synthResult.degraded)
         warnings.push('LLM synthesis degraded; used the offline extractive notes.');
     } else {
@@ -347,6 +350,9 @@ export class AnalyzeVideo {
         detailLevel: config.note.detailLevel,
         signal,
       });
+      const fallbackReport = checkCoverage(sectionsToText(finalSections), transcript, frames);
+      counts = fallbackReport.counts;
+      gaps = fallbackReport.gaps;
     }
     this.throwIfAborted(signal);
 
@@ -411,12 +417,9 @@ export class AnalyzeVideo {
       }
     }
 
-    // Final coverage is measured before the verbatim appendix is added.
-    const finalReport = checkCoverage(sectionsToText(finalSections), transcript, frames);
-    finalSections = [
-      ...finalSections,
-      buildValidationSection(findings, finalReport.counts, finalReport.gaps),
-    ];
+    // Coverage was measured on the composed notes BEFORE any verbatim appendix
+    // was rendered, so a gap can never be reclassified as covered by its own text.
+    finalSections = [...finalSections, buildValidationSection(findings, counts, gaps)];
 
     // ---- 10. Note + render -------------------------------------------------
     this.emitProgress(input, {
@@ -428,6 +431,8 @@ export class AnalyzeVideo {
     });
     const processingTimeMs = Date.now() - pipelineStart;
     const note = this.createNote(video, finalSections, config, processingTimeMs);
+    // Gate before any file is written: raw pipeline markers must never reach notes.
+    assertNoRawMarkers(note.toMarkdown());
     const formats = this.resolveFormats(input.formats, config);
     const noteFiles = await this.render(note, outputDir, baseName, formats);
 

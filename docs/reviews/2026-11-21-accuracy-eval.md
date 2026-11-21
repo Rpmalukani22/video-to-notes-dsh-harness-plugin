@@ -22,7 +22,8 @@ Stub-only numbers are **harness checks, not accuracy evidence**. A real-provider
 
 - `npx tsc --noEmit` — exit 0.
 - `npm run build` — exit 0.
-- `npx vitest run` — 13 files, 116 tests passed.
+- `npx vitest run` — 25 files, 131 tests passed.
+- Seeded eval now drives `LLMNoteValidator.validate` with a scripted provider whose basis is present in the OCR fixture; TP/FP/FN are derived from the validator output, not a hand-built correction. A negative seed (fabricated basis) is rejected and downgraded to a Check item.
 - `scripts/e2e-check.ps1` — `E2E OK: sample_notes.md, sample_ocr.md, sample_transcript.md`; exactly three markdown files, screenshots folder non-empty, negative control detected the seeded marker.
 - `scripts/e2e-check-llm.ps1 -Provider stub` — `LLM E2E OK (stub)`; synthesis, validation and repair stages executed with the deterministic stub.
 - Seeded accuracy test — TP=1, FP=0, FN=0, precision=1.0, recall=1.0, coverage 100% (scripted stub, labelled a harness check).
