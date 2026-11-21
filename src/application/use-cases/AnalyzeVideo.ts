@@ -1,5 +1,5 @@
 import { join, basename, extname } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, rm } from 'fs/promises';
 import type { VideoMetadata } from '../../domain/entities/Video.js';
 import { Video } from '../../domain/entities/Video.js';
 import type { Frame } from '../../domain/entities/Frame.js';
@@ -153,6 +153,12 @@ export class AnalyzeVideo {
     const outputDir = input.outputDir ?? join(process.cwd(), 'output');
     await mkdir(outputDir, { recursive: true });
 
+    // Intermediate WAVs live only for the duration of this run. The legacy
+    // path is kept because earlier builds extracted audio into the CWD/output.
+    const workDir = join(outputDir, '.work', video.id);
+    const legacyWorkDir = join(process.cwd(), 'output', '.work', video.id);
+
+    try {
     // ---- 2. Frames ---------------------------------------------------------
     this.emitProgress(input, {
       stage: 'frames',
@@ -172,7 +178,7 @@ export class AnalyzeVideo {
       etaSeconds: 20,
       throughput: '',
     });
-    const audio = await this.extractAudio(video, signal, warnings);
+    const audio = await this.extractAudio(video, workDir, signal, warnings);
     this.throwIfAborted(signal);
 
     if (frames.length === 0 && !audio) {
@@ -214,7 +220,6 @@ export class AnalyzeVideo {
         });
         this._deps.logger.info('VAD/audio noise suspected. Running ffmpeg audio enhancement...');
         try {
-          const workDir = join(outputDir, '.work', video.id);
           await mkdir(workDir, { recursive: true });
           const enhancedAudio = await this._deps.audioEnhancer.enhance(audio, workDir, signal);
           transcript = await this.transcribe(video, enhancedAudio, config, signal, warnings);
@@ -463,6 +468,30 @@ export class AnalyzeVideo {
     });
 
     return { note, video, processingTimeMs, outputFiles, manifest, warnings };
+    } finally {
+      // Runs after notes validation/rendering AND on failure/abort, so no
+      // intermediate WAVs are left behind.
+      await this.cleanupIntermediateAudio(workDir, legacyWorkDir, warnings);
+    }
+  }
+
+  /** Delete only the per-job work folders; never touch the final artifacts. */
+  private async cleanupIntermediateAudio(
+    workDir: string,
+    legacyWorkDir: string,
+    warnings: string[]
+  ): Promise<void> {
+    const dirs = workDir === legacyWorkDir ? [workDir] : [workDir, legacyWorkDir];
+    for (const dir of dirs) {
+      try {
+        await rm(dir, { recursive: true, force: true });
+        this._deps.logger.debug('Removed intermediate audio files', { dir });
+      } catch (error) {
+        const message = `Could not remove intermediate audio files in ${dir}: ${describe(error)}`;
+        warnings.push(message);
+        this._deps.logger.warn(message);
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -517,16 +546,14 @@ export class AnalyzeVideo {
 
   private async extractAudio(
     video: Video,
+    workDir: string,
     signal: AbortSignal,
     warnings: string[]
   ): Promise<AudioFile | null> {
     try {
+      await mkdir(workDir, { recursive: true });
       return await this.withPool(this._deps.ffmpegPool, () =>
-        this._deps.audioExtractor.extract(
-          video,
-          join(process.cwd(), 'output', '.work', video.id),
-          signal
-        )
+        this._deps.audioExtractor.extract(video, workDir, signal)
       );
     } catch (error) {
       const message = `Audio extraction failed: ${describe(error)}`;
