@@ -1,8 +1,13 @@
-import { AudioFile, ITranscriptionEngine, TranscriptionConfig } from '../../application/ports/Interfaces.js';
-import { Transcript, TranscriptSegment, WordTimestamp } from '../../domain/entities/Transcript.js';
+import type {
+  AudioFile,
+  ITranscriptionEngine,
+  TranscriptionConfig,
+} from '../../application/ports/Interfaces.js';
+import type { WordTimestamp } from '../../domain/entities/Transcript.js';
+import { Transcript, TranscriptSegment } from '../../domain/entities/Transcript.js';
 import { Timestamp } from '../../domain/value-objects/Timestamp.js';
 import { Confidence } from '../../domain/value-objects/Confidence.js';
-import { ILogger, IMetricsCollector } from '../../application/ports/Interfaces.js';
+import type { ILogger, IMetricsCollector } from '../../application/ports/Interfaces.js';
 import { spawn } from 'child_process';
 import { access, readFile, readdir, unlink } from 'fs/promises';
 import { join } from 'path';
@@ -48,7 +53,7 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
   async transcribe(audio: AudioFile, config: TranscriptionConfig): Promise<Transcript> {
     const startedAt = Date.now();
     // Fail before spawning anything when the model file is absent.
-    await this.resolveModelPath(config.model);
+    await this.resolveModelPath(config.model, config.multilingual === true);
 
     // If audio is longer than 10 minutes (600s), process in chunks for resilience & progress
     let result: { segments: TranscriptSegment[]; language: string; averageConfidence: number };
@@ -61,7 +66,10 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     if (config.enableEscalation && config.maxEscalations > 0 && result.segments.length > 0) {
       let escalations = 0;
       let current = config;
-      while (result.averageConfidence < config.escalationThreshold && escalations < config.maxEscalations) {
+      while (
+        result.averageConfidence < config.escalationThreshold &&
+        escalations < config.maxEscalations
+      ) {
         const nextModel = this.getNextLargerModel(current.model);
         if (nextModel === current.model) break;
         this._logger.info('Escalating transcription model', {
@@ -70,9 +78,10 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
           confidence: result.averageConfidence,
         });
         current = { ...current, model: nextModel };
-        result = audio.duration > 600
-          ? await this.transcribeChunked(audio, current)
-          : await this.runTranscriptionWithFallback(audio, current);
+        result =
+          audio.duration > 600
+            ? await this.transcribeChunked(audio, current)
+            : await this.runTranscriptionWithFallback(audio, current);
         escalations += 1;
       }
     }
@@ -81,7 +90,13 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     this._metrics.recordHistogram('transcription_duration_ms', processingTimeMs);
     this._currentModel = config.model;
 
-    return new Transcript(audio.videoId, result.segments, result.language, config.model, processingTimeMs);
+    return new Transcript(
+      audio.videoId,
+      result.segments,
+      result.language,
+      config.model,
+      processingTimeMs
+    );
   }
 
   private async transcribeChunked(
@@ -99,7 +114,9 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     try {
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i]!;
-        this._logger.info(`Transcribing chunk ${i + 1}/${chunks.length} (${chunk.startSec.toFixed(0)}s - ${(chunk.startSec + chunk.durationSec).toFixed(0)}s)...`);
+        this._logger.info(
+          `Transcribing chunk ${i + 1}/${chunks.length} (${chunk.startSec.toFixed(0)}s - ${(chunk.startSec + chunk.durationSec).toFixed(0)}s)...`
+        );
 
         const chunkResult = await this.runTranscriptionWithFallback(chunk.audioFile, config);
         if (chunkResult.language && chunkResult.language !== 'auto') {
@@ -110,7 +127,7 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
         for (const seg of chunkResult.segments) {
           const startMs = seg.start.milliseconds + offsetMs;
           const endMs = seg.end.milliseconds + offsetMs;
-          const offsetWords = seg.words.map((w) => ({
+          const offsetWords = seg.words.map(w => ({
             ...w,
             start: Timestamp.fromMilliseconds(w.start.milliseconds + offsetMs),
             end: Timestamp.fromMilliseconds(w.end.milliseconds + offsetMs),
@@ -138,7 +155,9 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     }
 
     const averageConfidence = totalSegmentCount > 0 ? totalConfidenceSum / totalSegmentCount : 0;
-    this._logger.info(`Chunked transcription complete: ${allSegments.length} total segments transcribed`);
+    this._logger.info(
+      `Chunked transcription complete: ${allSegments.length} total segments transcribed`
+    );
     return { segments: allSegments, language: detectedLanguage, averageConfidence };
   }
 
@@ -151,7 +170,9 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     // If VAD was enabled but resulted in zero segments on a non-empty audio track,
     // automatically fallback to transcribing without VAD!
     if (result.segments.length === 0 && config.enableVAD && audio.duration > 8) {
-      this._logger.warn(`VAD yielded 0 segments for audio (${audio.duration.toFixed(1)}s); retrying without VAD...`);
+      this._logger.warn(
+        `VAD yielded 0 segments for audio (${audio.duration.toFixed(1)}s); retrying without VAD...`
+      );
       const noVadConfig = { ...config, enableVAD: false };
       result = await this.runTranscription(audio, noVadConfig);
     }
@@ -164,28 +185,90 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
   }
 
   getSupportedLanguages(): string[] {
-    return ['auto', 'en', 'zh', 'de', 'es', 'ru', 'ko', 'fr', 'ja', 'pt', 'tr', 'pl', 'ca', 'nl', 'ar', 'sv', 'it', 'id', 'hi', 'fi', 'vi', 'he', 'uk', 'el', 'ms', 'cs', 'ro', 'da', 'no', 'sk', 'hu', 'ta', 'th', 'ur', 'hr', 'bg', 'lt', 'lv', 'sr', 'sl', 'et', 'mt', 'is', 'mk', 'hy', 'ka', 'bn', 'gu', 'kn', 'ml', 'mr', 'ne', 'or', 'pa', 'si', 'te'];
+    return [
+      'auto',
+      'en',
+      'zh',
+      'de',
+      'es',
+      'ru',
+      'ko',
+      'fr',
+      'ja',
+      'pt',
+      'tr',
+      'pl',
+      'ca',
+      'nl',
+      'ar',
+      'sv',
+      'it',
+      'id',
+      'hi',
+      'fi',
+      'vi',
+      'he',
+      'uk',
+      'el',
+      'ms',
+      'cs',
+      'ro',
+      'da',
+      'no',
+      'sk',
+      'hu',
+      'ta',
+      'th',
+      'ur',
+      'hr',
+      'bg',
+      'lt',
+      'lv',
+      'sr',
+      'sl',
+      'et',
+      'mt',
+      'is',
+      'mk',
+      'hy',
+      'ka',
+      'bn',
+      'gu',
+      'kn',
+      'ml',
+      'mr',
+      'ne',
+      'or',
+      'pa',
+      'si',
+      'te',
+    ];
   }
 
   async warmup(): Promise<void> {
-    await this.resolveModelPath('base.int8');
+    await this.resolveModelPath('base.int8', false);
   }
 
   private async runTranscription(
     audio: AudioFile,
     config: TranscriptionConfig
   ): Promise<{ segments: TranscriptSegment[]; language: string; averageConfidence: number }> {
-    const modelPath = await this.resolveModelPath(config.model);
+    const modelPath = await this.resolveModelPath(config.model, config.multilingual === true);
     const outputBase = join(tmpdir(), `whisper_${process.pid}_${Date.now()}`);
     const outputPath = `${outputBase}.json`;
 
     const args: string[] = [
-      '-m', modelPath,
-      '-f', audio.path,
-      '-l', config.language ?? 'auto',
+      '-m',
+      modelPath,
+      '-f',
+      audio.path,
+      '-l',
+      config.language ?? 'auto',
       config.wordTimestamps ? '-ojf' : '-oj',
-      '--output-file', outputBase,
-      '-t', '4',
+      '--output-file',
+      outputBase,
+      '-t',
+      '4',
     ];
 
     if (config.enableVAD) {
@@ -235,15 +318,18 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
         finish(() => reject(new Error(`whisper.cpp timed out after ${timeoutMs}ms`)));
       }, timeoutMs);
 
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
       proc.stdout.on('data', () => undefined);
 
-      proc.on('close', (code) => {
+      proc.on('close', code => {
         if (code === 0) finish(resolve);
-        else finish(() => reject(new Error(`whisper.cpp exited with code ${code}: ${stderr.trim()}`)));
+        else
+          finish(() => reject(new Error(`whisper.cpp exited with code ${code}: ${stderr.trim()}`)));
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', err => {
         finish(() => reject(new Error(`Failed to spawn ${this._whisperPath}: ${err.message}`)));
       });
     });
@@ -254,13 +340,11 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
    * directory. whisper.cpp ships `ggml-base.en.bin`, but older installs and
    * pre-converted models use other names, so accept every common spelling.
    */
-  private async resolveModelPath(model: WhisperModel): Promise<string> {
+  private async resolveModelPath(model: WhisperModel, multilingual: boolean): Promise<string> {
     const base = model.replace(/\.int8$/i, '');
-    const candidates = [
-      `${model}.bin`,          // base.int8.bin (pre-converted)
-      `ggml-${base}.bin`,      // ggml-base.bin
-      `ggml-${base}.en.bin`,   // ggml-base.en.bin (whisper.cpp download)
-    ];
+    const candidates = multilingual
+      ? [`${model}.bin`, `ggml-${base}.bin`]
+      : [`${model}.bin`, `ggml-${base}.bin`, `ggml-${base}.en.bin`];
 
     const searchDirs = [this._modelDir];
     if (this._modelDir === './models' || this._modelDir === 'models') {
@@ -284,10 +368,16 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
       }
     }
 
+    if (multilingual) {
+      throw new Error(
+        `Multilingual Whisper model not found. Place ggml-base.bin or ggml-small.bin in ${this._modelDir}; ` +
+          'download from https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin'
+      );
+    }
     throw new Error(
       `Whisper model not found in "${this._modelDir}". Looked for: ${candidates.join(', ')}. ` +
-      'Download a ggml model (e.g. ggml-base.en.bin) from ' +
-      'https://huggingface.co/ggerganov/whisper.cpp and place it in that directory.'
+        'Download a ggml model (e.g. ggml-base.en.bin) from ' +
+        'https://huggingface.co/ggerganov/whisper.cpp and place it in that directory.'
     );
   }
 
@@ -306,7 +396,7 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
     for (const dir of searchDirs) {
       try {
         const entries = await readdir(dir);
-        const match = entries.find((name) => /silero.*\.bin$/i.test(name));
+        const match = entries.find(name => /silero.*\.bin$/i.test(name));
         if (match) return join(dir, match);
       } catch {
         continue;
@@ -317,7 +407,9 @@ export class WhisperTranscriptionEngine implements ITranscriptionEngine {
 
   private getNextLargerModel(current: WhisperModel): WhisperModel {
     const idx = MODEL_CHAIN.indexOf(current);
-    return idx >= 0 && idx < MODEL_CHAIN.length - 1 ? (MODEL_CHAIN[idx + 1] as WhisperModel) : current;
+    return idx >= 0 && idx < MODEL_CHAIN.length - 1
+      ? (MODEL_CHAIN[idx + 1] as WhisperModel)
+      : current;
   }
 }
 
@@ -343,7 +435,10 @@ interface WhisperDocument {
  * Parse whisper.cpp `-oj` output. Handles both the `transcription` array used
  * by current releases and a bare `segments` array from older builds.
  */
-export function parseWhisperJson(raw: string, videoId: string): {
+export function parseWhisperJson(
+  raw: string,
+  videoId: string
+): {
   segments: TranscriptSegment[];
   language: string;
   averageConfidence: number;
@@ -363,9 +458,9 @@ export function parseWhisperJson(raw: string, videoId: string): {
     const end = Timestamp.fromMilliseconds(Math.max(startMs, endMs));
 
     const words: WordTimestamp[] = (segment.tokens ?? [])
-      .map((token) => (token.text ?? '').trim())
-      .filter((word) => word.length > 0 && !/^\[.*\]$/.test(word))
-      .map((word) => ({
+      .map(token => (token.text ?? '').trim())
+      .filter(word => word.length > 0 && !/^\[.*\]$/.test(word))
+      .map(word => ({
         word,
         start,
         end,
@@ -386,9 +481,10 @@ export function parseWhisperJson(raw: string, videoId: string): {
     );
   }
 
-  const averageConfidence = segments.length === 0
-    ? 0
-    : segments.reduce((acc, s) => acc + s.confidence.value, 0) / segments.length;
+  const averageConfidence =
+    segments.length === 0
+      ? 0
+      : segments.reduce((acc, s) => acc + s.confidence.value, 0) / segments.length;
 
   return { segments, language, averageConfidence };
 }

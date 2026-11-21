@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
 import { parse as parseYaml } from 'yaml';
-import {
+import type {
   IConfigurationProvider,
   ProcessingConfig,
   LLMConfig,
@@ -10,8 +10,13 @@ import {
   OCRConfig,
   TranscriptionConfig,
   NoteConfig,
+  ValidationConfig,
 } from '../../application/ports/Interfaces.js';
-import { ILogger } from '../../application/ports/Interfaces.js';
+import {
+  resolveLanguageIntent,
+  SUPPORTED_LANGUAGES,
+} from '../../domain/services/LanguageIntent.js';
+import type { ILogger } from '../../application/ports/Interfaces.js';
 
 export const DEFAULT_FRAME_CONFIG: FrameExtractionConfig = {
   preset: 'lecture',
@@ -20,6 +25,7 @@ export const DEFAULT_FRAME_CONFIG: FrameExtractionConfig = {
   minIntervalSec: 30,
   maxIntervalSec: 5,
   intervalSec: 15,
+  screenshotCount: 20,
   enableTransientDetection: false,
   maxFrames: 500,
   fastExtract: true,
@@ -39,6 +45,7 @@ export const DEFAULT_OCR_CONFIG: OCRConfig = {
 export const DEFAULT_TRANSCRIPTION_CONFIG: TranscriptionConfig = {
   model: 'base.int8',
   enableVAD: true,
+  multilingual: false,
   wordTimestamps: true,
   enableEscalation: true,
   escalationThreshold: 0.6,
@@ -52,6 +59,12 @@ export const DEFAULT_NOTE_CONFIG: NoteConfig = {
   detailLevel: 'standard',
 };
 
+export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
+  enabled: true,
+  maxCorrections: 10,
+  abstainOnUnverifiedBasis: true,
+};
+
 export const DEFAULT_PROCESSING_CONFIG: ProcessingConfig = {
   frameExtraction: DEFAULT_FRAME_CONFIG,
   ocr: DEFAULT_OCR_CONFIG,
@@ -59,6 +72,7 @@ export const DEFAULT_PROCESSING_CONFIG: ProcessingConfig = {
   note: DEFAULT_NOTE_CONFIG,
   privacy: 'local-only',
   batch: { maxConcurrent: 2, checkpointInterval: 1, resume: true },
+  validation: DEFAULT_VALIDATION_CONFIG,
 };
 
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
@@ -74,7 +88,12 @@ const PRESETS: Record<string, Partial<ProcessingConfig>> = {
     note: { ...DEFAULT_NOTE_CONFIG, detailLevel: 'comprehensive' },
   },
   tutorial: {
-    frameExtraction: { ...DEFAULT_FRAME_CONFIG, preset: 'tutorial', sceneThreshold: 0.25, fastIntervalSec: 10 },
+    frameExtraction: {
+      ...DEFAULT_FRAME_CONFIG,
+      preset: 'tutorial',
+      sceneThreshold: 0.25,
+      fastIntervalSec: 10,
+    },
     ocr: { ...DEFAULT_OCR_CONFIG, codeDetection: true },
     note: { ...DEFAULT_NOTE_CONFIG, detailLevel: 'comprehensive' },
   },
@@ -83,7 +102,12 @@ const PRESETS: Record<string, Partial<ProcessingConfig>> = {
     note: { ...DEFAULT_NOTE_CONFIG, detailLevel: 'executive' },
   },
   documentary: {
-    frameExtraction: { ...DEFAULT_FRAME_CONFIG, preset: 'documentary', sceneThreshold: 0.35, fastIntervalSec: 15 },
+    frameExtraction: {
+      ...DEFAULT_FRAME_CONFIG,
+      preset: 'documentary',
+      sceneThreshold: 0.35,
+      fastIntervalSec: 15,
+    },
     note: { ...DEFAULT_NOTE_CONFIG, detailLevel: 'standard' },
   },
   custom: {},
@@ -125,7 +149,10 @@ export class YamlConfigProvider implements IConfigurationProvider {
       this._logger.debug('Loaded configuration', { path: configPath });
     } catch (error) {
       if (!isNotFound(error)) {
-        this._logger.warn('Could not read config file; using defaults', { path: configPath, error: String(error) });
+        this._logger.warn('Could not read config file; using defaults', {
+          path: configPath,
+          error: String(error),
+        });
       }
     } finally {
       this._loaded = true;
@@ -146,10 +173,10 @@ export class YamlConfigProvider implements IConfigurationProvider {
 
   getPresetConfig(preset: string): PresetConfig {
     const overrides = PRESETS[preset] ?? {};
-    const frame = (overrides.frameExtraction ?? this._processing.frameExtraction) as FrameExtractionConfig;
-    const ocr = (overrides.ocr ?? this._processing.ocr) as OCRConfig;
-    const transcription = (overrides.transcription ?? this._processing.transcription) as TranscriptionConfig;
-    const note = (overrides.note ?? this._processing.note) as NoteConfig;
+    const frame = overrides.frameExtraction ?? this._processing.frameExtraction;
+    const ocr = overrides.ocr ?? this._processing.ocr;
+    const transcription = overrides.transcription ?? this._processing.transcription;
+    const note = overrides.note ?? this._processing.note;
     return clone({ name: preset, frameExtraction: frame, ocr, transcription, note });
   }
 
@@ -159,20 +186,32 @@ export class YamlConfigProvider implements IConfigurationProvider {
 
     const frame = record['frameExtraction'] as Partial<FrameExtractionConfig> | undefined;
     if (frame) {
-      if (frame.maxFrames !== undefined && (!Number.isInteger(frame.maxFrames) || frame.maxFrames < 1)) {
+      if (
+        frame.maxFrames !== undefined &&
+        (!Number.isInteger(frame.maxFrames) || frame.maxFrames < 1)
+      ) {
         errors.push('frameExtraction.maxFrames must be a positive integer');
       }
-      if (frame.sceneThreshold !== undefined && (frame.sceneThreshold < 0 || frame.sceneThreshold > 1)) {
+      if (
+        frame.sceneThreshold !== undefined &&
+        (frame.sceneThreshold < 0 || frame.sceneThreshold > 1)
+      ) {
         errors.push('frameExtraction.sceneThreshold must be between 0 and 1');
       }
     }
 
     const ocr = record['ocr'] as Partial<OCRConfig> | undefined;
     if (ocr) {
-      if (ocr.confidenceThreshold !== undefined && (ocr.confidenceThreshold < 0 || ocr.confidenceThreshold > 1)) {
+      if (
+        ocr.confidenceThreshold !== undefined &&
+        (ocr.confidenceThreshold < 0 || ocr.confidenceThreshold > 1)
+      ) {
         errors.push('ocr.confidenceThreshold must be between 0 and 1');
       }
-      if (ocr.languages !== undefined && (!Array.isArray(ocr.languages) || ocr.languages.length === 0)) {
+      if (
+        ocr.languages !== undefined &&
+        (!Array.isArray(ocr.languages) || ocr.languages.length === 0)
+      ) {
         errors.push('ocr.languages must be a non-empty array');
       }
     }
@@ -183,10 +222,22 @@ export class YamlConfigProvider implements IConfigurationProvider {
       if (transcription.model !== undefined && !models.includes(transcription.model)) {
         errors.push(`transcription.model must be one of ${models.join(', ')}`);
       }
+      if (transcription.language !== undefined) {
+        const intent = resolveLanguageIntent(transcription.language);
+        if (intent.warning !== undefined) {
+          errors.push(
+            `Invalid language "${transcription.language}"; use an ISO code from: ${SUPPORTED_LANGUAGES.join(', ')}`
+          );
+        }
+      }
     }
 
     const batch = record['batch'] as Partial<ProcessingConfig['batch']> | undefined;
-    if (batch && batch.maxConcurrent !== undefined && (!Number.isInteger(batch.maxConcurrent) || batch.maxConcurrent < 1)) {
+    if (
+      batch &&
+      batch.maxConcurrent !== undefined &&
+      (!Number.isInteger(batch.maxConcurrent) || batch.maxConcurrent < 1)
+    ) {
       errors.push('batch.maxConcurrent must be a positive integer');
     }
 
@@ -195,7 +246,12 @@ export class YamlConfigProvider implements IConfigurationProvider {
 }
 
 function isNotFound(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT';
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT'
+  );
 }
 
 function clone<T>(value: T): T {

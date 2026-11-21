@@ -1,4 +1,4 @@
-import { Timestamp } from '../value-objects/Timestamp.js';
+import type { Timestamp } from '../value-objects/Timestamp.js';
 
 /**
  * Note section - hierarchical structure
@@ -6,18 +6,18 @@ import { Timestamp } from '../value-objects/Timestamp.js';
 export interface NoteSection {
   id: string;
   title: string;
-  level: number;              // Heading level (1-4)
+  level: number; // Heading level (1-4)
   timestamp: Timestamp | null; // Associated timestamp
-  content: string;            // Markdown content
-  subsections: NoteSection[];  // Nested sections
-  citations: Citation[];       // Source citations
+  content: string; // Markdown content
+  subsections: NoteSection[]; // Nested sections
+  citations: Citation[]; // Source citations
   metadata: Record<string, unknown>;
 }
 
 export interface Citation {
   text: string;
   source: 'ocr' | 'transcript' | 'scene';
-  timestamp: string;           // HH:MM:SS.mmm format
+  timestamp: string; // HH:MM:SS.mmm format
   frameId?: string | undefined;
   segmentId?: string | undefined;
   confidence: number;
@@ -31,11 +31,11 @@ export interface NoteFrontmatter {
   videoId: string;
   sourcePath: string;
   contentHash: string;
-  duration: string;            // HH:MM:SS.mmm
+  duration: string; // HH:MM:SS.mmm
   resolution: string;
-  fps: string;                 // Rational format
+  fps: string; // Rational format
   processingConfig: ProcessingConfigSummary;
-  generatedAt: string;         // ISO 8601
+  generatedAt: string; // ISO 8601
   processingTimeMs: number;
   tags: string[];
 }
@@ -56,6 +56,8 @@ export interface ProcessingConfigSummary {
     model: string;
     enableVAD: boolean;
     vocabularyBoost?: string;
+    language?: string;
+    multilingual?: boolean;
   };
   privacy: string;
 }
@@ -152,19 +154,26 @@ export class Note {
   getWordCount(): number {
     return this._sections.reduce((acc, s) => {
       const words = s.content.split(/\s+/).filter(w => w.length > 0).length;
-      return acc + words + s.subsections.reduce((subAcc, sub) => subAcc + sub.content.split(/\s+/).filter(w => w.length > 0).length, 0);
+      return (
+        acc +
+        words +
+        s.subsections.reduce(
+          (subAcc, sub) => subAcc + sub.content.split(/\s+/).filter(w => w.length > 0).length,
+          0
+        )
+      );
     }, 0);
   }
 
   toMarkdown(): string {
-    const frontmatter = '---\n' + Object.entries(this._frontmatter)
+    const frontmatter = `---\n${Object.entries(this._frontmatter)
       .map(([key, value]) => {
         if (typeof value === 'object') {
           return `${key}: ${JSON.stringify(value)}`;
         }
         return `${key}: ${value}`;
       })
-      .join('\n') + '\n---\n\n';
+      .join('\n')}\n---\n\n`;
 
     const sections = this._sections.map(s => this.sectionToMarkdown(s)).join('\n\n');
     return frontmatter + sections;
@@ -173,13 +182,13 @@ export class Note {
   private sectionToMarkdown(section: NoteSection, depth: number = 0): string {
     const heading = '#'.repeat(Math.min(section.level, 4));
     let md = `${heading} ${section.title}\n\n`;
-    
+
     if (section.timestamp) {
       md += `*Timestamp: ${section.timestamp.toISO()}*\n\n`;
     }
-    
-    md += section.content + '\n\n';
-    
+
+    md += `${section.content}\n\n`;
+
     if (section.citations.length > 0) {
       md += '*Citations:*\n';
       for (const citation of section.citations) {
@@ -203,7 +212,7 @@ export class Note {
       frontmatter: this._frontmatter,
       sections: this._sections,
       generatedAt: this._generatedAt.toISOString(),
-      processingConfig: this._processingConfig
+      processingConfig: this._processingConfig,
     };
   }
 }

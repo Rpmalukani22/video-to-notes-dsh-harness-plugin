@@ -1,6 +1,6 @@
 ---
 name: video-to-notes
-description: "Convert video files into structured Markdown notes with key screenshots, on-screen OCR text, and synchronized transcript. Supports VAD control and audio enhancement."
+description: "Convert video files into structured Markdown notes with key screenshots, on-screen OCR text, and synchronized transcript. Supports multilingual (Hinglish/Hindi) transcription, VAD off, and audio enhancement."
 category: productivity
 risk: safe
 tags: [video, notes, transcription, ocr, whisper, ffmpeg]
@@ -34,8 +34,16 @@ Converts local video files into 3 comprehensive outputs:
      "enhanceAudio": false
    }
    ```
-   - If audio has heavy background noise, air conditioning, or fan noise that cuts off speech, set `"vadEnabled": false` or `"enhanceAudio": true`.
+   - If audio has heavy background noise, air conditioning, or fan noise that cuts off speech, or the user says "vad off", set `"vadEnabled": false`. Alternatively set `"enhanceAudio": true` to clean the audio with ffmpeg before transcription.
 
-3. **Check Status:**
+3. **Multilingual transcription (Hinglish / Hindi):**
+   When the user mentions Hinglish, Hindi or another non-English language, pass the language and force a multilingual model:
+   ```json
+   { "videoPath": "C:/path/to/lecture.mp4", "language": "hinglish", "multilingual": true }
+   ```
+   - `language` accepts `hinglish`, `hi` (Hindi), `en`, or `auto`. Hinglish passes a romanized-Hindi vocabulary hint to Whisper.
+   - `multilingual: true` selects a non-English `ggml-*.bin` model; an English-only `ggml-*.en.bin` will NOT be used. If no multilingual model is installed, the job reports the exact download path for `ggml-base.bin`.
+
+4. **Check Status:**
    Poll `video_note_status` with the returned `jobId` until status is `completed`.
    The tool output will display paths to all 3 generated markdown files and screenshots folder.

@@ -1,7 +1,10 @@
 import { randomUUID } from 'crypto';
-import { AnalyzeVideoOutput, ProgressUpdate } from '../../application/use-cases/AnalyzeVideo.js';
-import { ProcessingConfig } from '../../application/ports/Interfaces.js';
-import { Services } from '../../infrastructure/composition/createServices.js';
+import type {
+  AnalyzeVideoOutput,
+  ProgressUpdate,
+} from '../../application/use-cases/AnalyzeVideo.js';
+import type { ProcessingConfig } from '../../application/ports/Interfaces.js';
+import type { Services } from '../../infrastructure/composition/createServices.js';
 
 /**
  * In-memory job registry for the plugin.
@@ -36,6 +39,8 @@ export interface StartJobInput {
   formats?: ('md' | 'json' | 'html')[] | undefined;
   vadEnabled?: boolean | undefined;
   enhanceAudio?: boolean | undefined;
+  language?: string | undefined;
+  multilingual?: boolean | undefined;
 }
 
 interface JobState {
@@ -49,6 +54,8 @@ interface JobState {
   formats: ('md' | 'json' | 'html')[] | undefined;
   vadEnabled: boolean | undefined;
   enhanceAudio: boolean | undefined;
+  language: string | undefined;
+  multilingual: boolean | undefined;
   createdAt: number;
   startedAt: number | undefined;
   finishedAt: number | undefined;
@@ -77,7 +84,7 @@ export class JobRegistry {
 
     const jobId = randomUUID();
     let settle: () => void = () => {};
-    const done = new Promise<void>((resolve) => {
+    const done = new Promise<void>(resolve => {
       settle = resolve;
     });
 
@@ -92,6 +99,8 @@ export class JobRegistry {
       formats: input.formats,
       vadEnabled: input.vadEnabled,
       enhanceAudio: input.enhanceAudio,
+      language: input.language,
+      multilingual: input.multilingual,
       createdAt: Date.now(),
       startedAt: undefined,
       finishedAt: undefined,
@@ -124,7 +133,7 @@ export class JobRegistry {
       await job.done;
     } else {
       let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<void>((resolve) => {
+      const timeout = new Promise<void>(resolve => {
         timer = setTimeout(resolve, timeoutMs);
       });
       await Promise.race([job.done, timeout]);
@@ -165,6 +174,12 @@ export class JobRegistry {
       if (job.enhanceAudio !== undefined) {
         transcriptionOverride.enhanceAudio = job.enhanceAudio;
       }
+      if (job.language !== undefined) {
+        transcriptionOverride.language = job.language;
+      }
+      if (job.multilingual !== undefined) {
+        transcriptionOverride.multilingual = job.multilingual;
+      }
 
       const mergedConfig: Partial<ProcessingConfig> = {
         ...baseConfig,
@@ -203,7 +218,10 @@ export class JobRegistry {
     }
   }
 
-  private resolveConfig(services: Services, preset: string | undefined): Partial<ProcessingConfig> | undefined {
+  private resolveConfig(
+    services: Services,
+    preset: string | undefined
+  ): Partial<ProcessingConfig> | undefined {
     if (preset === undefined || preset.length === 0) return undefined;
 
     const resolved = services.config.getPresetConfig(preset);

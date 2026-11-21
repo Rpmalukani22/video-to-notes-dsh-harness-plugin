@@ -26,3 +26,4 @@ The report will detail:
 - whisper-cli status and models (optional, for speech-to-text)
 - scenedetect status (optional, for scene change detection)
 - Current LLM provider and synthesis mode (Harness LLM, DeepSeek, OpenAI, Anthropic, or offline extractive)
+- Multilingual readiness: for Hinglish/Hindi transcription a non-English `ggml-base.bin` (or `ggml-small.bin`) must be present in the Whisper model directory. An English-only `ggml-*.en.bin` is insufficient; the doctor report flags this when `multilingual` is requested.

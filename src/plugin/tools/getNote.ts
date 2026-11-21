@@ -55,20 +55,25 @@ export function registerGetNoteTool(ctx: Context, runtime: PluginRuntime): () =>
             const framesDir = field(value, 'framesDir');
             const warnings = field(value, 'warnings');
 
-            let banner = '### 🎬 Video Processing Complete!\n\n' +
-              '**Outputs generated:**\n' +
+            let banner =
+              `### 🎬 Video Processing Complete!\n\n` +
+              `**Outputs generated:**\n` +
               `1. 📝 **Synthesized Notes (with Screenshots):** \`${notePath}\`\n` +
               `2. 📋 **Full Transcript:** \`${transcriptPath}\`\n` +
-              `3. 🔍 **On-Screen OCR Text:** \`${ocrPath}\`\n` +
-              (framesDir ? `📸 **Screenshots Directory:** \`${framesDir}\`\n\n` : '\n');
+              `3. 🔍 **On-Screen OCR Text:** \`${ocrPath}\`\n${
+                framesDir ? `📸 **Screenshots Directory:** \`${framesDir}\`\n\n` : '\n'
+              }`;
 
             if (warnings.includes('VAD_EMPTY_TRANSCRIPT')) {
-              banner += '> ⚠️ **Speech Detection Warning:** Audio was detected, but Voice Activity Detection (VAD) returned no transcript.\n' +
-                '> Background noise or fan sound may have triggered VAD speech suppression.\n' +
-                '> **Suggested fix:** Re-run with `vadEnabled: false` or `enhanceAudio: true`.\n\n';
+              banner +=
+                '> ⚠️ **Speech Detection Warning:** Audio was detected, but the transcript is empty or partial.\n' +
+                '> Background noise (fan/AC) may have caused VAD to strip speech.\n' +
+                '> Suggested fix 1: re-run with `vadEnabled: false` (or say "vad off").\n' +
+                '> Suggested fix 2: re-run with `enhanceAudio: true` — ffmpeg filter: ' +
+                'highpass=f=100,lowpass=f=7500,afftdn=nf=-20,acompressor=threshold=-20dB:ratio=4:attack=5:release=50,loudnorm\n\n';
             }
 
-            banner += '---\n\n' + note;
+            banner += `---\n\n${note}`;
             return [{ type: 'text', text: banner }];
           }
           if (status === 'failed') {
@@ -79,7 +84,8 @@ export function registerGetNoteTool(ctx: Context, runtime: PluginRuntime): () =>
           return [
             {
               type: 'text',
-              text: `${field(value, 'jobId')}: ${status}${percent.length > 0 ? ` (${percent}%)` : ''}` +
+              text:
+                `${field(value, 'jobId')}: ${status}${percent.length > 0 ? ` (${percent}%)` : ''}` +
                 `${stage.length > 0 ? ` - ${stage}` : ''}`,
             },
           ];

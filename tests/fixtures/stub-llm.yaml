@@ -1,0 +1,16 @@
+processing:
+  privacy: cloud-opt-in
+  validation:
+    enabled: true
+    maxCorrections: 10
+    abstainOnUnverifiedBasis: true
+llm:
+  provider: custom
+  model: stub-v1
+  temperature: 0.2
+  maxTokens: 2048
+  topP: 0.9
+  customEndpoint:
+    baseUrl: http://127.0.0.1:4399
+    apiKey: stub
+    model: stub-v1

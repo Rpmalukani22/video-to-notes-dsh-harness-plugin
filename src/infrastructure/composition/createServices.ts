@@ -4,16 +4,14 @@ import { randomUUID } from 'crypto';
 
 import { AnalyzeVideo } from '../../application/use-cases/AnalyzeVideo.js';
 import { BatchProcess } from '../../application/use-cases/BatchProcess.js';
-import {
-  ExtractiveSummarizer,
-  ISummarizer,
-  LLMSummarizer,
-  SummarizeOptions,
-} from '../../application/services/Summarizer.js';
+import type { ISummarizer, SummarizeOptions } from '../../application/services/Summarizer.js';
+import { ExtractiveSummarizer, LLMSummarizer } from '../../application/services/Summarizer.js';
+import { LLMNoteValidator } from '../../application/services/NoteValidator.js';
+import type { NoteValidationResult } from '../../domain/entities/ValidationFinding.js';
 import { ContentAggregator } from '../../domain/services/ContentAggregator.js';
 import { TimestampAligner } from '../../domain/services/TimestampAligner.js';
-import { NoteSection } from '../../domain/entities/Note.js';
-import {
+import type { NoteSection } from '../../domain/entities/Note.js';
+import type {
   ICheckpointStore,
   IConfigurationProvider,
   ILLMProvider,
@@ -22,9 +20,13 @@ import {
   ISecretProvider,
   LLMConfig,
   PipelineContext,
+  INoteValidator,
+  ValidationInput,
+  ValidationOptions,
 } from '../../application/ports/Interfaces.js';
 
-import { ConsoleLogger, LogLevel } from '../adapters/ConsoleLogger.js';
+import type { LogLevel } from '../adapters/ConsoleLogger.js';
+import { ConsoleLogger } from '../adapters/ConsoleLogger.js';
 import { InMemoryMetricsCollector } from '../adapters/InMemoryMetricsCollector.js';
 import { JsonCheckpointStore } from '../adapters/JsonCheckpointStore.js';
 import { YamlConfigProvider } from '../adapters/YamlConfigProvider.js';
@@ -36,10 +38,8 @@ import { FfmpegAudioExtractor } from '../adapters/FfmpegAudioExtractor.js';
 import { TesseractOCRProcessor } from '../adapters/TesseractOCRProcessor.js';
 import { WhisperTranscriptionEngine } from '../adapters/WhisperTranscriptionEngine.js';
 import { PySceneDetectSceneAnalyzer } from '../adapters/PySceneDetectSceneAnalyzer.js';
-import {
-  HarnessLLMProvider,
-  HarnessLlmBridge,
-} from '../adapters/HarnessLLMProvider.js';
+import type { HarnessLlmBridge } from '../adapters/HarnessLLMProvider.js';
+import { HarnessLLMProvider } from '../adapters/HarnessLLMProvider.js';
 import {
   AnthropicLLMProvider,
   DeepSeekLLMProvider,
@@ -52,7 +52,7 @@ import { OCRRenderer } from '../adapters/OCRRenderer.js';
 import { FrameCopier } from '../adapters/FrameCopier.js';
 import { AudioEnhancer } from '../adapters/AudioEnhancer.js';
 import { NoteSynthesizer } from '../../application/services/NoteSynthesizer.js';
-import {
+import type {
   INoteSynthesizer,
   SynthesisInput,
   SynthesisOptions,
@@ -143,6 +143,35 @@ class DelegatingSynthesizer implements INoteSynthesizer {
   synthesize(input: SynthesisInput, options?: SynthesisOptions): Promise<SynthesizedResult> {
     return this._delegate.synthesize(input, options);
   }
+
+  revise(
+    sections: NoteSection[],
+    findings: NoteValidationResult,
+    input: SynthesisInput,
+    options?: SynthesisOptions
+  ): Promise<NoteSection[]> {
+    return this._delegate.revise(sections, findings, input, options);
+  }
+}
+
+class DelegatingValidator implements INoteValidator {
+  private _delegate: INoteValidator;
+
+  constructor(logger: ILogger) {
+    this._delegate = new LLMNoteValidator(
+      null,
+      { provider: 'none', temperature: 0.1, maxTokens: 1024, topP: 0.9 },
+      logger
+    );
+  }
+
+  use(delegate: INoteValidator): void {
+    this._delegate = delegate;
+  }
+
+  validate(input: ValidationInput, options?: ValidationOptions): Promise<NoteValidationResult> {
+    return this._delegate.validate(input, options);
+  }
 }
 
 export class Services {
@@ -157,12 +186,14 @@ export class Services {
   readonly frameCopier: FrameCopier;
   readonly audioEnhancer: AudioEnhancer;
   readonly analyzeVideo: AnalyzeVideo;
+  readonly validator: DelegatingValidator;
   readonly batchProcess: BatchProcess;
   readonly defaultOutputDir: string;
 
   private readonly _options: VideoToNotesServiceConfig;
   private readonly _summarizer: DelegatingSummarizer;
   private readonly _synthesizer: DelegatingSynthesizer;
+  private readonly _validator: DelegatingValidator;
   private _llm: ILLMProvider | null = null;
   private _initPromise: Promise<void> | null = null;
   private _disposed = false;
@@ -185,16 +216,26 @@ export class Services {
     this.rawTranscriptRenderer = new TranscriptRenderer();
     this.rawOcrRenderer = new OCRRenderer();
     this.frameCopier = new FrameCopier(this.logger);
-    this.audioEnhancer = new AudioEnhancer(options.ffmpegPath ?? 'ffmpeg', this.logger, this.metrics);
+    this.audioEnhancer = new AudioEnhancer(
+      options.ffmpegPath ?? 'ffmpeg',
+      this.logger,
+      this.metrics
+    );
     this._summarizer = new DelegatingSummarizer();
     this._synthesizer = new DelegatingSynthesizer(this.logger);
+    this._validator = new DelegatingValidator(this.logger);
+    this.validator = this._validator;
 
     const ffmpeg = options.ffmpegPath ?? 'ffmpeg';
     const logger = this.logger;
     const metrics = this.metrics;
 
     this.analyzeVideo = new AnalyzeVideo({
-      metadataExtractor: new FfmpegVideoMetadataExtractor(options.ffprobePath ?? 'ffprobe', logger, metrics),
+      metadataExtractor: new FfmpegVideoMetadataExtractor(
+        options.ffprobePath ?? 'ffprobe',
+        logger,
+        metrics
+      ),
       frameExtractor: new FfmpegFrameExtractor(ffmpeg, logger, metrics),
       ocrProcessor: new TesseractOCRProcessor(
         options.tesseractPath ?? 'tesseract',
@@ -210,7 +251,11 @@ export class Services {
         metrics,
         ffmpeg
       ),
-      sceneAnalyzer: new PySceneDetectSceneAnalyzer(options.scenedetectPath ?? 'scenedetect', logger, metrics),
+      sceneAnalyzer: new PySceneDetectSceneAnalyzer(
+        options.scenedetectPath ?? 'scenedetect',
+        logger,
+        metrics
+      ),
       timestampAligner: new TimestampAligner(),
       createContentAggregator: () => new ContentAggregator(),
       noteRenderer: this.renderer,
@@ -223,9 +268,16 @@ export class Services {
       frameCopier: this.frameCopier,
       audioEnhancer: this.audioEnhancer,
       synthesizer: this._synthesizer,
+      validator: this._validator,
     });
 
-    this.batchProcess = new BatchProcess(this.analyzeVideo, this.config, this.checkpoint, metrics, logger);
+    this.batchProcess = new BatchProcess(
+      this.analyzeVideo,
+      this.config,
+      this.checkpoint,
+      metrics,
+      logger
+    );
   }
 
   /** Resolve configuration and the optional LLM provider. Idempotent. */
@@ -252,11 +304,27 @@ export class Services {
       llmConfig = { ...llmConfig, provider: 'harness' };
     }
 
+    const processing = this.config.getVideoProcessingConfig();
+    const validation = processing.validation;
+
     if (llmConfig.provider === 'none') {
-      this.logger.debug('LLM summarisation disabled; using offline extractive summariser & synthesizer');
+      this.logger.debug(
+        'LLM summarisation disabled; using offline extractive summariser & synthesizer'
+      );
       this._llm = null;
       this._summarizer.use(new ExtractiveSummarizer());
       this._synthesizer.use(new NoteSynthesizer(null, llmConfig, this.logger));
+      this._validator.use(
+        new LLMNoteValidator(
+          null,
+          llmConfig,
+          this.logger,
+          processing.privacy,
+          validation.maxCorrections,
+          validation.abstainOnUnverifiedBasis,
+          this.metrics
+        )
+      );
       return;
     }
 
@@ -264,7 +332,20 @@ export class Services {
     this._llm = adapter;
     this._summarizer.use(new LLMSummarizer(adapter, llmConfig, this.logger));
     this._synthesizer.use(new NoteSynthesizer(adapter, llmConfig, this.logger));
-    this.logger.info('LLM summarisation & synthesis enabled', { provider: llmConfig.provider });
+    this._validator.use(
+      new LLMNoteValidator(
+        adapter,
+        llmConfig,
+        this.logger,
+        processing.privacy,
+        validation.maxCorrections,
+        validation.abstainOnUnverifiedBasis,
+        this.metrics
+      )
+    );
+    this.logger.info('LLM summarisation, synthesis & validation enabled', {
+      provider: llmConfig.provider,
+    });
   }
 
   private mergeLlmConfig(base: LLMConfig): LLMConfig {
@@ -303,7 +384,12 @@ export class Services {
 
       case 'anthropic': {
         const apiKey = await this.requireSecret('anthropic-api-key', 'ANTHROPIC_API_KEY');
-        return new AnthropicLLMProvider(apiKey, model ?? 'claude-3-5-sonnet-20241022', logger, metrics);
+        return new AnthropicLLMProvider(
+          apiKey,
+          model ?? 'claude-3-5-sonnet-20241022',
+          logger,
+          metrics
+        );
       }
 
       case 'google': {
@@ -385,7 +471,7 @@ export class Services {
     ]);
 
     const required = ['ffmpeg', 'ffprobe'];
-    const ok = tools.filter((tool) => required.includes(tool.name)).every((tool) => tool.available);
+    const ok = tools.filter(tool => required.includes(tool.name)).every(tool => tool.available);
 
     const llmConfig = this._options.llm ?? this.config.getLLMConfig();
     const llmProvider = llmConfig.provider ?? 'none';
@@ -455,8 +541,13 @@ async function probeScenedetect(command: string): Promise<ToolStatus> {
   return legacy.available ? legacy : modern;
 }
 
-function probeBinary(name: string, command: string, args: string[], timeoutMs = 5000): Promise<ToolStatus> {
-  return new Promise<ToolStatus>((resolveProbe) => {
+function probeBinary(
+  name: string,
+  command: string,
+  args: string[],
+  timeoutMs = 5000
+): Promise<ToolStatus> {
+  return new Promise<ToolStatus>(resolveProbe => {
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -483,7 +574,13 @@ function probeBinary(name: string, command: string, args: string[], timeoutMs = 
 
     const timer = setTimeout(() => {
       child.kill();
-      finish({ name, command, available: false, version: null, error: `timed out after ${timeoutMs}ms` });
+      finish({
+        name,
+        command,
+        available: false,
+        version: null,
+        error: `timed out after ${timeoutMs}ms`,
+      });
     }, timeoutMs);
 
     child.stdout.on('data', (data: Buffer) => {
@@ -517,6 +614,6 @@ function probeBinary(name: string, command: string, args: string[], timeoutMs = 
 }
 
 function firstLine(text: string): string | null {
-  const line = text.split(/\r?\n/).find((entry) => entry.trim().length > 0);
+  const line = text.split(/\r?\n/).find(entry => entry.trim().length > 0);
   return line === undefined ? null : line.trim();
 }
