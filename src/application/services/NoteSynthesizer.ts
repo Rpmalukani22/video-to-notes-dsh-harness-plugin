@@ -24,8 +24,14 @@ import {
 } from './llmSafety.js';
 import { rankSentences } from './Summarizer.js';
 
-const MAX_SINGLE_PASS_CHARS = 12000;
+const MAX_MAP_CALLS = 8;
 const RESPONSE_RESERVE_TOKENS = 512;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+/** Rough token estimate: ~4 characters per token for English prose. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
+}
 
 /**
  * Cross-modal note synthesis. Full transcript and OCR evidence are wrapped as
@@ -68,10 +74,12 @@ export class NoteSynthesizer implements INoteSynthesizer {
       const screenshotMap = matchScreenshots(input.sections, input.frames, input.keyFramePaths);
       const wrapped = wrapUntrustedEvidence(evidence.transcript, evidence.ocr, evidence.language);
 
+      const contextTokens = this._provider?.getModelInfo().maxContextTokens ?? 8192;
+      const inputBudgetTokens = Math.max(1024, contextTokens - RESPONSE_RESERVE_TOKENS);
       const rawSections =
-        wrapped.length <= MAX_SINGLE_PASS_CHARS
-          ? await this.reduceOnce(input, wrapped, screenshotMap, options)
-          : await this.mapThenReduce(input, evidence, screenshotMap, options);
+        estimateTokens(wrapped) <= inputBudgetTokens
+          ? await this.reduceOnce(input, wrapped, options)
+          : await this.mapThenReduce(input, evidence, options, inputBudgetTokens);
 
       const sections = this.attachScreenshots(rawSections, input);
       // Coverage is measured on the LLM prose only. The verbatim gap appendix is
@@ -179,7 +187,6 @@ export class NoteSynthesizer implements INoteSynthesizer {
   private async reduceOnce(
     input: SynthesisInput,
     wrapped: string,
-    screenshots: Map<string, string | null>,
     options: SynthesisOptions
   ): Promise<NoteSection[]> {
     const response = await this.callWithRetry(
@@ -205,14 +212,21 @@ export class NoteSynthesizer implements INoteSynthesizer {
   private async mapThenReduce(
     input: SynthesisInput,
     evidence: { transcript: string; ocr: string; language: string },
-    screenshots: Map<string, string | null>,
-    options: SynthesisOptions
+    options: SynthesisOptions,
+    inputBudgetTokens: number
   ): Promise<NoteSection[]> {
     const mapped: string[] = [];
-    for (const section of input.sections) {
+    const ocrPerCall = evidence.ocr
+      .split('\n')
+      .slice(0, Math.max(3, Math.floor(inputBudgetTokens / 20)))
+      .join('\n');
+    for (const section of input.sections.slice(0, MAX_MAP_CALLS)) {
       if (options.signal?.aborted) break;
-      const slice = sliceForSection(section, evidence.transcript);
-      if (slice.trim().length === 0 && evidence.ocr.trim().length === 0) continue;
+      const slice = sliceForSection(section, evidence.transcript).slice(
+        0,
+        inputBudgetTokens * CHARS_PER_TOKEN_ESTIMATE
+      );
+      if (slice.trim().length === 0 && ocrPerCall.trim().length === 0) continue;
       const response = await this.callWithRetry(
         {
           systemPrompt: this.systemPrompt(),
@@ -221,7 +235,7 @@ export class NoteSynthesizer implements INoteSynthesizer {
               role: 'user',
               content: `Section: ${section.title}\n\n${wrapUntrustedEvidence(
                 slice,
-                evidence.ocr,
+                ocrPerCall,
                 evidence.language
               )}\n\nWrite combined notes for this section only, in Markdown.`,
             },
@@ -289,7 +303,11 @@ export class NoteSynthesizer implements INoteSynthesizer {
       maxScreenshots: Math.min(6, input.frames.length),
       durationMs: input.video.duration.milliseconds,
     });
-    const images = [...new Set(selected
+    const sortedFrames = [...input.frames].sort((a, b) => a.timestamp.milliseconds - b.timestamp.milliseconds);
+    const withEnds = [sortedFrames[0], ...selected, sortedFrames.at(-1)].filter(
+      (frame): frame is NonNullable<typeof frame> => frame !== undefined
+    );
+    const images = [...new Set(withEnds
       .map(frame => input.keyFramePaths.get(frame.id))
       .filter((path): path is string => typeof path === 'string' && path.length > 0))];
     if (images.length === 0 || sections.length === 0) return sections;
@@ -349,7 +367,7 @@ function estimateFromContext(
 }
 
 function sliceForSection(section: NoteSection, transcript: string): string {
-  if (section.timestamp === null) return transcript;
+  if (section.timestamp === null) return '';
   const centerMs = section.timestamp.milliseconds;
   return transcript
     .split('\n')

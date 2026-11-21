@@ -44,6 +44,9 @@ try {
   if (@(Get-ChildItem $tmp -Filter *.md -File).Count -ne 3) { throw 'LLM E2E did not write exactly three markdown files' }
   $calls = if (Test-Path $callLog) { @(Get-Content $callLog) } else { @() }
   if ($Provider -eq 'stub' -and $calls.Count -lt 2) { throw "stub call count too low: $($calls.Count)" }
+  if ($Provider -eq 'stub' -and -not (@($calls | Select-String -SimpleMatch 'validation').Count -gt 0)) {
+    throw 'stub log has no validation call: independent validation did not reach the model'
+  }
 
   $record = "LLM E2E OK ($Provider): three artifacts, validation section, embeds; stub calls=$($calls.Count)"
   Write-Output $record
