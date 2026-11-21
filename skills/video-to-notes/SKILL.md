@@ -75,6 +75,8 @@ When the user mentions Hinglish, Hindi or another non-English language, pass the
 ```
 
 - `language` accepts `hinglish`, `hi` (Hindi), `en`, `auto`, or ISO codes. Hinglish passes a romanized-Hindi vocabulary hint.
+- The plugin never guesses the language: it uses exactly what you pass. If the user did not name a language, `en` is the safe default for English-medium lectures. Do not leave a known Hindi/Hinglish video on `auto` with the English-only model — auto-detection can produce garbled, repeated text. Say `hinglish` / `hi` explicitly to select the installed multilingual `ggml-base.bin`.
+- An explicit `en` run can look correct even on a Hinglish-medium lecture because it forces English decoding; it is not evidence that the audio is monolingual English.
 - `multilingual: true` selects a non-English `ggml-*.bin` model; an English-only `ggml-*.en.bin` will NOT be used. If no multilingual model is installed, the job reports the exact download path for `ggml-base.bin`.
 
 ## Quick reference
