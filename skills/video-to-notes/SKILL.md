@@ -14,7 +14,7 @@ Converts a local video into **three** Markdown files plus a supporting screensho
 2. **Full Raw Transcript:** `[video]_transcript.md` — timestamped, verbatim speech.
 3. **On-Screen Text:** `[video]_ocr.md` — deduplicated, timestamped text read from frames.
 
-Screenshots are saved to `[video]_frames/`. This folder is a supporting asset, not a fourth report.
+Screenshots are saved to `[video]_frames/`. You (the harness) then create a fourth, reader-ready file **`[video]_CURATED_NOTES.md`** from all three reports plus the frames — see step 5 below.
 
 ## Tools Available
 
@@ -56,7 +56,21 @@ Screenshots are saved to `[video]_frames/`. This folder is a supporting asset, n
    - the notes contain `## Validation & Accuracy` and at least one `![](...)` screenshot link. Image links are percent-encoded (e.g. `20%20Normal%20Distribution_frames/frame_01.jpg`) so spaces and parentheses in folder names do not break Markdown renderers — do not rewrite them to raw paths.
    If any check fails, say so explicitly and give the paths/warnings. Do not silently present a partial result.
 
-5. **Report** all three file paths and the screenshots folder to the user.
+5. **Generate the curated final notes (fourth artifact).** After the job is `completed`, read all four sources the plugin produced:
+   - `[video]_notes.md` (LLM/extractive notes + existing screenshot links)
+   - `[video]_transcript.md` (verbatim speech)
+   - `[video]_ocr.md` (on-screen text)
+   - `[video]_frames/` (the extracted screenshots)
+
+   Write a separate file named **`[video]_CURATED_NOTES.md`** in the same output directory. This is the final, reader-ready version; do not modify the three raw artifacts.
+   - Open with a title, source video, duration/language and a table of contents.
+   - Organise into clear sections with **bold** key terms, tables, code blocks and short quotes from the transcript.
+   - Attach relevant screenshots in every section: reuse the percent-encoded relative links from `[video]_notes.md` (for example `![Slide](20%20Normal%20Distribution_frames/frame_03_00-01-00-000.jpg)`), or build the same form from the `[video]_frames/` directory. Never use raw paths with spaces. Verify each link points to a real JPG.
+   - Cross-check the curated text against both the transcript and the OCR. Nothing important from either may be omitted; add a short **Coverage** note listing anything intentionally skipped.
+   - Where the instructor's statement is wrong or incomplete, add a callout: `> ⚠️ Instructor said "X", however the correct concept is Y.` Only flag what you can justify from the sources or established knowledge.
+   - Keep mathematical notation readable (plain text or fenced blocks) and preserve timestamps where useful.
+
+6. **Report all four artifacts** to the user: curated notes, notes, transcript, OCR, plus the screenshots folder.
 
 Intermediate WAV files under `.work/` are deleted automatically after notes validation and rendering (also on failure/abort). No manual cleanup is needed. Long audio is transcribed in 10-minute chunks; that logic is unaffected by cleanup.
 
@@ -85,4 +99,5 @@ When the user mentions Hinglish, Hindi or another non-English language, pass the
 analyze_video(videoPath) -> jobId
 video_note_status(jobId, wait: "true", timeout_ms: "600000") -> completed | failed  [BLOCKS]
 completed -> notesPath + transcriptPath + ocrPath + framesDir + notes
+then write [video]_CURATED_NOTES.md (curated final notes with embedded frames)
 ```
