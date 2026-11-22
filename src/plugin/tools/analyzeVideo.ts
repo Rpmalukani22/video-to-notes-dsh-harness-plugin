@@ -15,9 +15,13 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
     defineTool({
       name: 'analyze_video',
       description:
-        'Convert a local video file into structured Markdown notes with timestamps, ' +
-        'on-screen text (OCR) and a transcript. Returns immediately with a job id; ' +
-        'poll video_note_status for progress and the note path.',
+        'Convert a local video into three artifacts: combined LLM notes with screenshots, ' +
+        'a full transcript and raw on-screen OCR. Returns immediately with a job id; ' +
+        'poll video_note_status for progress and all three paths. ' +
+        'If the user says "vad off", pass vadEnabled: false. ' +
+        'If the user mentions Hinglish, Hindi or another non-English language, pass language ' +
+        'accordingly (for example { "language": "hinglish", "multilingual": true }) ' +
+        'so the multilingual Whisper model is used.',
       parameters: {
         videoPath: {
           type: 'string',
@@ -31,7 +35,8 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
         },
         outputDir: {
           type: 'string',
-          description: 'Absolute directory for the generated note. Defaults to the plugin outputDir.',
+          description:
+            'Absolute directory for the generated note. Defaults to the plugin outputDir.',
         },
         formats: {
           type: 'string',
@@ -39,11 +44,23 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
         },
         vadEnabled: {
           type: 'boolean',
-          description: 'Enable Voice Activity Detection (VAD). Defaults to true. Set to false if background noise or fans are cutting off speech.',
+          description:
+            'Enable Voice Activity Detection (VAD). Defaults to true. Set to false if background noise or fans are cutting off speech.',
         },
         enhanceAudio: {
           type: 'boolean',
-          description: 'Apply FFmpeg noise reduction and dynamic normalization before speech recognition. Useful when background fan/noise is audible.',
+          description:
+            'Apply FFmpeg noise reduction and dynamic normalization before speech recognition. Useful when background fan/noise is audible.',
+        },
+        language: {
+          type: 'string',
+          description:
+            'Spoken language. Use "hinglish" for Hindi+English, "hi" for Hindi, "en" for English, or "auto".',
+        },
+        multilingual: {
+          type: 'boolean',
+          description:
+            'Force a multilingual Whisper model (non-.en) instead of an English-only model.',
         },
       },
       output: {
@@ -70,7 +87,14 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
             : undefined;
         const formats = parseFormats(args.formats);
         const vadEnabled = args.vadEnabled !== undefined ? Boolean(args.vadEnabled) : undefined;
-        const enhanceAudio = args.enhanceAudio !== undefined ? Boolean(args.enhanceAudio) : undefined;
+        const enhanceAudio =
+          args.enhanceAudio !== undefined ? Boolean(args.enhanceAudio) : undefined;
+        const language =
+          typeof args.language === 'string' && args.language.trim().length > 0
+            ? args.language.trim()
+            : undefined;
+        const multilingual =
+          args.multilingual !== undefined ? Boolean(args.multilingual) : undefined;
 
         const jobId = runtime.jobs.start({
           videoPath,
@@ -79,6 +103,8 @@ export function registerAnalyzeVideoTool(ctx: Context, runtime: PluginRuntime): 
           ...(formats !== undefined ? { formats } : {}),
           ...(vadEnabled !== undefined ? { vadEnabled } : {}),
           ...(enhanceAudio !== undefined ? { enhanceAudio } : {}),
+          ...(language !== undefined ? { language } : {}),
+          ...(multilingual !== undefined ? { multilingual } : {}),
         });
 
         return { jobId, status: 'accepted' as const };

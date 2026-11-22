@@ -1,12 +1,17 @@
-import { Video } from '../../domain/entities/Video.js';
-import { Frame } from '../../domain/entities/Frame.js';
-import { Transcript, TranscriptSegment } from '../../domain/entities/Transcript.js';
-import { Scene } from '../../domain/entities/Scene.js';
-import { Note, NoteSection, Citation } from '../../domain/entities/Note.js';
-import { OCRResult } from '../../domain/value-objects/OCRResult.js';
-import { AlignedContentBlock } from '../../domain/services/TimestampAligner.js';
-import { AggregatedSection } from '../../domain/services/ContentAggregator.js';
+import type { Video } from '../../domain/entities/Video.js';
+import type { Frame } from '../../domain/entities/Frame.js';
+import type { Transcript, TranscriptSegment } from '../../domain/entities/Transcript.js';
+import type { Scene } from '../../domain/entities/Scene.js';
+import type { Note, NoteSection, Citation } from '../../domain/entities/Note.js';
+import type { OCRResult } from '../../domain/value-objects/OCRResult.js';
+import type { AlignedContentBlock } from '../../domain/services/TimestampAligner.js';
+import type { AggregatedSection } from '../../domain/services/ContentAggregator.js';
 import type { ZodTypeAny, infer as ZodInfer } from 'zod';
+import type {
+  CoverageCounts,
+  CoverageGap,
+  NoteValidationResult,
+} from '../../domain/entities/ValidationFinding.js';
 
 /**
  * Application Layer Ports (Interfaces)
@@ -17,6 +22,24 @@ import type { ZodTypeAny, infer as ZodInfer } from 'zod';
 // Re-export domain-owned types so existing importers keep working, but there is
 // exactly one declaration of each in the codebase (inside the domain).
 export type { NoteSection, Citation };
+export type {
+  Correction,
+  CoverageGap,
+  CoverageCounts,
+  NoteValidationResult,
+} from '../../domain/entities/ValidationFinding.js';
+
+export interface ValidationModel {
+  provider: string;
+  model: string;
+}
+
+export interface ValidationConfig {
+  enabled: boolean;
+  model?: ValidationModel | undefined;
+  maxCorrections: number;
+  abstainOnUnverifiedBasis: boolean;
+}
 
 /**
  * Video metadata extraction port.
@@ -43,13 +66,14 @@ export interface IFrameExtractor {
 export interface FrameExtractionConfig {
   preset: 'lecture' | 'tutorial' | 'meeting' | 'documentary' | 'custom';
   strategy: string;
-  sceneThreshold: number;           // 0.2-0.4
-  minIntervalSec: number;           // Max frames when static
-  maxIntervalSec: number;           // Min frames during action
+  sceneThreshold: number; // 0.2-0.4
+  minIntervalSec: number; // Max frames when static
+  maxIntervalSec: number; // Min frames during action
+  screenshotCount: number; // Cap on saved screenshots (maxFrames caps extraction)
   intervalSec: number;
   enableTransientDetection: boolean;
-  maxFrames: number;                // Hard cap
-  fastExtract: boolean;             // Use direct PTS seeking
+  maxFrames: number; // Hard cap
+  fastExtract: boolean; // Use direct PTS seeking
   fastIntervalSec?: number | undefined;
   enableRegionDetection: boolean;
   regionOfInterest?: 'screen-share' | 'participants' | 'all' | undefined;
@@ -85,10 +109,10 @@ export interface AudioFile {
   /** Video that produced this audio track. */
   videoId: string;
   path: string;
-  duration: number;           // seconds
-  sampleRate: number;         // e.g., 16000
-  channels: number;           // 1 = mono, 2 = stereo
-  format: string;             // wav, mp3, etc.
+  duration: number; // seconds
+  sampleRate: number; // e.g., 16000
+  channels: number; // 1 = mono, 2 = stereo
+  format: string; // wav, mp3, etc.
 }
 
 /**
@@ -111,6 +135,7 @@ export interface TranscriptionConfig {
   escalationThreshold: number;
   maxEscalations: number;
   enhanceAudio?: boolean | undefined;
+  multilingual?: boolean | undefined;
 }
 
 /**
@@ -196,7 +221,8 @@ export interface IFrameCopier {
     frames: Frame[],
     outputDir: string,
     baseName: string,
-    maxFrames?: number
+    maxFrames?: number,
+    durationMs?: number
   ): Promise<Map<string, string>>; // frameId -> relative or saved image path
 }
 
@@ -225,14 +251,44 @@ export interface SynthesisOptions {
   detailLevel?: 'executive' | 'standard' | 'comprehensive' | undefined;
   enableValidation?: boolean | undefined;
   signal?: AbortSignal | undefined;
+  privacy?: ProcessingConfig['privacy'] | undefined;
+  validation?: ValidationConfig | undefined;
 }
 
 export interface SynthesizedResult {
   sections: NoteSection[];
-  validations: ConceptValidation[];
+  gapCounts: CoverageCounts;
+  gaps: CoverageGap[];
+  degraded: boolean;
 }
 
-export interface INoteSynthesizer {
+export interface ValidationInput {
+  notes: string;
+  transcript: Transcript;
+  frames: Frame[];
+  screenshots: Map<string, string>;
+  language: string;
+}
+
+export interface ValidationOptions {
+  signal?: AbortSignal | undefined;
+  model?: ValidationModel | undefined;
+}
+
+export interface INoteValidator {
+  validate(input: ValidationInput, options?: ValidationOptions): Promise<NoteValidationResult>;
+}
+
+export interface IValidationReviser {
+  revise(
+    sections: NoteSection[],
+    findings: NoteValidationResult,
+    input: SynthesisInput,
+    options?: SynthesisOptions
+  ): Promise<NoteSection[]>;
+}
+
+export interface INoteSynthesizer extends IValidationReviser {
   synthesize(input: SynthesisInput, options?: SynthesisOptions): Promise<SynthesizedResult>;
 }
 
@@ -336,6 +392,7 @@ export interface ProcessingConfig {
   note: NoteConfig;
   privacy: 'local-only' | 'cloud-opt-in';
   batch: BatchConfig;
+  validation: ValidationConfig;
 }
 
 export interface BatchConfig {
@@ -352,44 +409,55 @@ export interface NoteConfig {
 }
 
 export interface LLMConfig {
-  provider: 'none' | 'harness' | 'deepseek' | 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
+  provider:
+    'none' | 'harness' | 'deepseek' | 'openai' | 'anthropic' | 'google' | 'ollama' | 'custom';
   model?: string | undefined;
   temperature: number;
   maxTokens: number;
   topP: number;
   harnessModel?: string | undefined;
-  customEndpoint?: {
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-    headers?: Record<string, string> | undefined;
-  } | undefined;
-  capabilities?: {
-    supportsJSONMode?: boolean | undefined;
-    supportsToolUse?: boolean | undefined;
-    maxContextTokens?: number | undefined;
-    optimalTemperature?: number | undefined;
-    citationComplexity?: 'simple' | 'standard' | 'rich' | undefined;
-  } | undefined;
-  contextManagement?: {
-    strategy: 'truncate' | 'chunk' | 'map-reduce';
-    chunkOverlapTokens: number;
-    maxChunkTokens: number;
-    synthesisTemperature: number;
-  } | undefined;
-  performance?: {
-    timeoutMs: number;
-    maxRetries: number;
-    retryBaseDelayMs: number;
-    circuitBreakerThreshold: number;
-    fallbackProviders: string[];
-    semanticCacheTTLMs: number;
-  } | undefined;
-  cost?: {
-    maxCostPerRequestUsd?: number | undefined;
-    dailyBudgetUsd?: number | undefined;
-    preferCheaperModel: boolean;
-  } | undefined;
+  customEndpoint?:
+    | {
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        headers?: Record<string, string> | undefined;
+      }
+    | undefined;
+  capabilities?:
+    | {
+        supportsJSONMode?: boolean | undefined;
+        supportsToolUse?: boolean | undefined;
+        maxContextTokens?: number | undefined;
+        optimalTemperature?: number | undefined;
+        citationComplexity?: 'simple' | 'standard' | 'rich' | undefined;
+      }
+    | undefined;
+  contextManagement?:
+    | {
+        strategy: 'truncate' | 'chunk' | 'map-reduce';
+        chunkOverlapTokens: number;
+        maxChunkTokens: number;
+        synthesisTemperature: number;
+      }
+    | undefined;
+  performance?:
+    | {
+        timeoutMs: number;
+        maxRetries: number;
+        retryBaseDelayMs: number;
+        circuitBreakerThreshold: number;
+        fallbackProviders: string[];
+        semanticCacheTTLMs: number;
+      }
+    | undefined;
+  cost?:
+    | {
+        maxCostPerRequestUsd?: number | undefined;
+        dailyBudgetUsd?: number | undefined;
+        preferCheaperModel: boolean;
+      }
+    | undefined;
 }
 
 export interface PresetConfig {
@@ -409,7 +477,16 @@ export interface ValidationResult {
  * Secrets provider port
  */
 export interface ISecretProvider {
-  get(key: 'whisper-api-key' | 'videodb-api-key' | 'deepseek-api-key' | 'openai-api-key' | 'anthropic-api-key' | 'google-api-key' | 'custom-llm-api-key'): Promise<string | null>;
+  get(
+    key:
+      | 'whisper-api-key'
+      | 'videodb-api-key'
+      | 'deepseek-api-key'
+      | 'openai-api-key'
+      | 'anthropic-api-key'
+      | 'google-api-key'
+      | 'custom-llm-api-key'
+  ): Promise<string | null>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
 }

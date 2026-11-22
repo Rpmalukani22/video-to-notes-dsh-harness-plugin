@@ -1,5 +1,5 @@
-import { NoteSection } from '../../domain/entities/Note.js';
-import { ILLMProvider, ILogger, LLMConfig } from '../ports/Interfaces.js';
+import type { NoteSection } from '../../domain/entities/Note.js';
+import type { ILLMProvider, ILogger, LLMConfig } from '../ports/Interfaces.js';
 
 /**
  * Summarisation port.
@@ -17,16 +17,9 @@ export interface ISummarizer {
   summarize(sections: NoteSection[], options?: SummarizeOptions): Promise<NoteSection[]>;
 }
 
-const STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'when', 'while', 'of', 'to',
-  'in', 'on', 'at', 'by', 'for', 'with', 'about', 'as', 'is', 'are', 'was', 'were', 'be',
-  'been', 'being', 'it', 'its', 'this', 'that', 'these', 'those', 'i', 'we', 'you', 'he',
-  'she', 'they', 'them', 'his', 'her', 'their', 'our', 'your', 'my', 'me', 'us', 'so',
-  'not', 'no', 'yes', 'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'would',
-  'should', 'will', 'just', 'very', 'really', 'like', 'there', 'here', 'what', 'which',
-  'who', 'how', 'why', 'from', 'into', 'than', 'too', 'also', 'up', 'down', 'out', 'over',
-  'under', 'again', 'more', 'most', 'some', 'any', 'all', 'each', 'every', 'one', 'two',
-]);
+import { STOPWORDS } from '../../domain/services/TextTokens.js';
+
+export { STOPWORDS };
 
 const BULLET_LIMITS: Record<NonNullable<SummarizeOptions['detailLevel']>, number> = {
   executive: 3,
@@ -44,7 +37,7 @@ const BULLET_LIMITS: Record<NonNullable<SummarizeOptions['detailLevel']>, number
 export class ExtractiveSummarizer implements ISummarizer {
   async summarize(sections: NoteSection[], options: SummarizeOptions = {}): Promise<NoteSection[]> {
     const limit = BULLET_LIMITS[options.detailLevel ?? 'standard'];
-    return sections.map((section) => this.summarizeSection(section, limit));
+    return sections.map(section => this.summarizeSection(section, limit));
   }
 
   private summarizeSection(section: NoteSection, limit: number): NoteSection {
@@ -53,18 +46,18 @@ export class ExtractiveSummarizer implements ISummarizer {
     const visualLines = dedupe(
       visual
         .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
     ).slice(0, limit);
 
     const audioSentences = rankSentences(audio, limit);
 
     const parts: string[] = [];
     if (visualLines.length > 0) {
-      parts.push('**On screen**', '', ...visualLines.map((line) => `- ${line}`), '');
+      parts.push('**On screen**', '', ...visualLines.map(line => `- ${line}`), '');
     }
     if (audioSentences.length > 0) {
-      parts.push('**Key points**', '', ...audioSentences.map((line) => `- ${line}`), '');
+      parts.push('**Key points**', '', ...audioSentences.map(line => `- ${line}`), '');
     }
 
     const content = parts.join('\n').trim();
@@ -97,7 +90,10 @@ export class LLMSummarizer implements ISummarizer {
     return result;
   }
 
-  private async summarizeSection(section: NoteSection, options: SummarizeOptions): Promise<NoteSection> {
+  private async summarizeSection(
+    section: NoteSection,
+    options: SummarizeOptions
+  ): Promise<NoteSection> {
     const source = stripLabels(section.content).slice(0, 12000);
     if (source.trim().length === 0) {
       return section;
@@ -114,10 +110,10 @@ export class LLMSummarizer implements ISummarizer {
             {
               role: 'user',
               content:
-                `Section: ${section.title}\n` +
-                (section.timestamp ? `Timestamp: ${section.timestamp.toISO()}\n` : '') +
-                `\nSource:\n${source}\n\n` +
-                'Write 3-8 Markdown bullet points capturing the key information.',
+                `Section: ${section.title}\n${
+                  section.timestamp ? `Timestamp: ${section.timestamp.toISO()}\n` : ''
+                }\nSource:\n${source}\n\n` +
+                `Write 3-8 Markdown bullet points capturing the key information.`,
             },
           ],
           temperature: this._config.temperature,
@@ -178,7 +174,7 @@ export function splitSectionContent(content: string): { visual: string; audio: s
 
 function stripLabels(content: string): string {
   const { visual, audio } = splitSectionContent(content);
-  return [visual, audio].filter((part) => part.length > 0).join('\n');
+  return [visual, audio].filter(part => part.length > 0).join('\n');
 }
 
 function dedupe(values: string[]): string[] {
@@ -194,12 +190,12 @@ function dedupe(values: string[]): string[] {
 }
 
 /** Frequency-rank sentences, then restore their original reading order. */
-function rankSentences(text: string, limit: number): string[] {
+export function rankSentences(text: string, limit: number): string[] {
   const sentences = text
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.split(' ').length >= 4);
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.split(' ').length >= 4);
 
   if (sentences.length === 0) {
     return text.trim().length > 0 ? [text.trim().slice(0, 240)] : [];
@@ -215,7 +211,8 @@ function rankSentences(text: string, limit: number): string[] {
   const scored = sentences.map((sentence, index) => ({
     sentence,
     index,
-    score: tokenize(sentence).reduce((acc, word) => acc + (frequency.get(word) ?? 0), 0) /
+    score:
+      tokenize(sentence).reduce((acc, word) => acc + (frequency.get(word) ?? 0), 0) /
       Math.sqrt(Math.max(1, sentence.split(' ').length)),
   }));
 
@@ -223,7 +220,7 @@ function rankSentences(text: string, limit: number): string[] {
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(1, limit))
     .sort((a, b) => a.index - b.index)
-    .map((entry) => entry.sentence);
+    .map(entry => entry.sentence);
 }
 
 function tokenize(sentence: string): string[] {
@@ -231,5 +228,5 @@ function tokenize(sentence: string): string[] {
     .toLowerCase()
     .replace(/[^a-z0-9\s'-]/g, ' ')
     .split(/\s+/)
-    .filter((word) => word.length > 2 && !STOPWORDS.has(word));
+    .filter(word => word.length > 2 && !STOPWORDS.has(word));
 }

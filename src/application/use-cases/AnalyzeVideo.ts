@@ -1,12 +1,18 @@
-import { join, basename, extname } from 'path';
-import { mkdir } from 'fs/promises';
-import { Video, VideoMetadata } from '../../domain/entities/Video.js';
-import { Frame } from '../../domain/entities/Frame.js';
+import { join, basename, extname, dirname } from 'path';
+import { mkdir, rm, rmdir } from 'fs/promises';
+import type { VideoMetadata } from '../../domain/entities/Video.js';
+import { Video } from '../../domain/entities/Video.js';
+import type { Frame } from '../../domain/entities/Frame.js';
 import { Transcript } from '../../domain/entities/Transcript.js';
-import { Scene } from '../../domain/entities/Scene.js';
-import { Note, NoteSection, NoteFrontmatter, ProcessingConfigSummary } from '../../domain/entities/Note.js';
+import type { Scene } from '../../domain/entities/Scene.js';
+import type {
+  NoteSection,
+  NoteFrontmatter,
+  ProcessingConfigSummary,
+} from '../../domain/entities/Note.js';
+import { Note } from '../../domain/entities/Note.js';
 import { Timestamp } from '../../domain/value-objects/Timestamp.js';
-import {
+import type {
   IVideoMetadataExtractor,
   IFrameExtractor,
   IOCRProcessor,
@@ -29,8 +35,15 @@ import {
   IFrameCopier,
   IAudioEnhancer,
   INoteSynthesizer,
+  INoteValidator,
 } from '../ports/Interfaces.js';
-import { ISummarizer } from '../services/Summarizer.js';
+import type { ISummarizer } from '../services/Summarizer.js';
+import { buildValidationSection } from '../../domain/services/CorrectionFormatter.js';
+import { assertNoRawMarkers } from '../../domain/services/MarkerGuard.js';
+import { normalizeTranscriptionConfig } from '../services/normalizeTranscriptionConfig.js';
+import { checkCoverage } from '../../domain/services/CoverageChecker.js';
+import { emptyCoverageCounts } from '../../domain/entities/ValidationFinding.js';
+import type { CoverageGap, NoteValidationResult } from '../../domain/entities/ValidationFinding.js';
 
 /**
  * AnalyzeVideo use case - orchestrates the full video -> notes pipeline.
@@ -93,6 +106,7 @@ export interface AnalyzeVideoDeps {
   frameCopier?: IFrameCopier | undefined;
   audioEnhancer?: IAudioEnhancer | undefined;
   synthesizer?: INoteSynthesizer | undefined;
+  validator?: INoteValidator | undefined;
 }
 
 const supportedFormats = new Set(['md', 'json', 'html']);
@@ -114,11 +128,23 @@ export class AnalyzeVideo {
     const config = this.resolveConfig(input.config);
     const videoId = crypto.randomUUID();
 
-    this.emitProgress(input, { stage: 'init', percent: 0, current: 'Reading video', etaSeconds: 0, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'init',
+      percent: 0,
+      current: 'Reading video',
+      etaSeconds: 0,
+      throughput: '',
+    });
     this.throwIfAborted(signal);
 
     // ---- 1. Metadata -------------------------------------------------------
-    this.emitProgress(input, { stage: 'metadata', percent: 4, current: 'Extracting metadata', etaSeconds: 10, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'metadata',
+      percent: 4,
+      current: 'Extracting metadata',
+      etaSeconds: 10,
+      throughput: '',
+    });
     const video = new Video(videoId, videoPath, emptyMetadata(), 'pending');
     await this._deps.metadataExtractor.extract(video);
     this.throwIfAborted(signal);
@@ -127,25 +153,49 @@ export class AnalyzeVideo {
     const outputDir = input.outputDir ?? join(process.cwd(), 'output');
     await mkdir(outputDir, { recursive: true });
 
+    // Intermediate WAVs live only for the duration of this run. The legacy
+    // path is kept because earlier builds extracted audio into the CWD/output.
+    const workDir = join(outputDir, '.work', video.id);
+    const legacyWorkDir = join(process.cwd(), 'output', '.work', video.id);
+
+    try {
     // ---- 2. Frames ---------------------------------------------------------
-    this.emitProgress(input, { stage: 'frames', percent: 8, current: 'Extracting frames', etaSeconds: 30, throughput: '0 fps' });
+    this.emitProgress(input, {
+      stage: 'frames',
+      percent: 8,
+      current: 'Extracting frames',
+      etaSeconds: 30,
+      throughput: '0 fps',
+    });
     const frames = await this.extractFrames(video, config, input, signal, warnings);
     this.throwIfAborted(signal);
 
     // ---- 3. Audio ----------------------------------------------------------
-    this.emitProgress(input, { stage: 'audio', percent: 28, current: 'Extracting audio', etaSeconds: 20, throughput: '' });
-    const audio = await this.extractAudio(video, signal, warnings);
+    this.emitProgress(input, {
+      stage: 'audio',
+      percent: 28,
+      current: 'Extracting audio',
+      etaSeconds: 20,
+      throughput: '',
+    });
+    const audio = await this.extractAudio(video, workDir, signal, warnings);
     this.throwIfAborted(signal);
 
     if (frames.length === 0 && !audio) {
       throw new Error(
         `No audio or frames could be extracted from "${videoPath}". ` +
-        'Check that the file is a readable video and that ffmpeg is installed.'
+          'Check that the file is a readable video and that ffmpeg is installed.'
       );
     }
 
     // ---- 4. Transcription --------------------------------------------------
-    this.emitProgress(input, { stage: 'transcription', percent: 34, current: 'Transcribing audio', etaSeconds: 90, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'transcription',
+      percent: 34,
+      current: 'Transcribing audio',
+      etaSeconds: 90,
+      throughput: '',
+    });
     let transcript = await this.transcribe(video, audio, config, signal, warnings);
 
     const hasAudio = audio !== null && audio.duration > 3;
@@ -153,16 +203,23 @@ export class AnalyzeVideo {
 
     if (hasAudio && emptyTranscript) {
       if (config.transcription.enableVAD) {
-        warnings.push('VAD_EMPTY_TRANSCRIPT: Audio was present but VAD produced empty transcript. You can specify vadEnabled: false to retry without VAD or enable audio enhancement.');
+        warnings.push(
+          'VAD_EMPTY_TRANSCRIPT: Audio was present but VAD produced empty transcript. You can specify vadEnabled: false to retry without VAD or enable audio enhancement.'
+        );
       } else {
         warnings.push('EMPTY_TRANSCRIPT: No speech detected in audio.');
       }
 
       if (config.transcription.enhanceAudio && this._deps.audioEnhancer) {
-        this.emitProgress(input, { stage: 'transcription', percent: 38, current: 'Enhancing audio and retrying transcription', etaSeconds: 60, throughput: '' });
+        this.emitProgress(input, {
+          stage: 'transcription',
+          percent: 38,
+          current: 'Enhancing audio and retrying transcription',
+          etaSeconds: 60,
+          throughput: '',
+        });
         this._deps.logger.info('VAD/audio noise suspected. Running ffmpeg audio enhancement...');
         try {
-          const workDir = join(outputDir, '.work', video.id);
           await mkdir(workDir, { recursive: true });
           const enhancedAudio = await this._deps.audioEnhancer.enhance(audio, workDir, signal);
           transcript = await this.transcribe(video, enhancedAudio, config, signal, warnings);
@@ -174,22 +231,46 @@ export class AnalyzeVideo {
     video.setTranscript(transcript);
 
     // ---- 5. OCR ------------------------------------------------------------
-    this.emitProgress(input, { stage: 'ocr', percent: 50, current: 'Reading on-screen text', etaSeconds: 40, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'ocr',
+      percent: 50,
+      current: 'Reading on-screen text',
+      etaSeconds: 40,
+      throughput: '',
+    });
     await this.runOcr(video, frames, config, input, signal, warnings);
     this.throwIfAborted(signal);
 
     // ---- 6. Scenes ---------------------------------------------------------
-    this.emitProgress(input, { stage: 'scenes', percent: 68, current: 'Detecting scenes', etaSeconds: 20, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'scenes',
+      percent: 68,
+      current: 'Detecting scenes',
+      etaSeconds: 20,
+      throughput: '',
+    });
     const scenes = await this.detectScenes(video, frames, warnings);
     for (const scene of scenes) video.addScene(scene);
     assignScenesToFrames(frames, scenes);
 
     // ---- 7. Alignment ------------------------------------------------------
-    this.emitProgress(input, { stage: 'alignment', percent: 74, current: 'Aligning timestamps', etaSeconds: 5, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'alignment',
+      percent: 74,
+      current: 'Aligning timestamps',
+      etaSeconds: 5,
+      throughput: '',
+    });
     const alignedBlocks = this._deps.timestampAligner.align(transcript.segments, frames, scenes);
 
     // ---- 8. Aggregation ----------------------------------------------------
-    this.emitProgress(input, { stage: 'aggregation', percent: 79, current: 'Building sections', etaSeconds: 5, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'aggregation',
+      percent: 79,
+      current: 'Building sections',
+      etaSeconds: 5,
+      throughput: '',
+    });
     const aggregator = this._deps.createContentAggregator();
     for (const block of alignedBlocks) {
       aggregator.processBlock(block);
@@ -204,9 +285,26 @@ export class AnalyzeVideo {
     let keyFramePaths = new Map<string, string>();
     const framesDir = join(outputDir, `${baseName}_frames`);
     if (this._deps.frameCopier) {
-      this.emitProgress(input, { stage: 'frames', percent: 81, current: 'Saving screenshots', etaSeconds: 5, throughput: '' });
-      keyFramePaths = await this._deps.frameCopier.copyKeyFrames(frames, outputDir, baseName, 20);
+      this.emitProgress(input, {
+        stage: 'screenshots',
+        percent: 81,
+        current: 'Saving screenshots',
+        etaSeconds: 5,
+        throughput: '',
+      });
+      const cap = Math.min(
+        config.frameExtraction.screenshotCount,
+        config.frameExtraction.maxFrames
+      );
+      keyFramePaths = await this._deps.frameCopier.copyKeyFrames(
+        frames,
+        outputDir,
+        baseName,
+        cap,
+        video.duration.milliseconds
+      );
     }
+    this.throwIfAborted(signal);
 
     // ---- 8.6 Render Raw Transcript & Raw OCR -------------------------------
     const transcriptPath = join(outputDir, `${baseName}_transcript.md`);
@@ -215,68 +313,194 @@ export class AnalyzeVideo {
     if (this._deps.rawTranscriptRenderer) {
       await this._deps.rawTranscriptRenderer.render(transcript, transcriptPath, video);
     }
-
     if (this._deps.rawOcrRenderer) {
       await this._deps.rawOcrRenderer.render(frames, ocrPath, video);
     }
 
-    // ---- 9. Synthesis & Summarization --------------------------------------
-    this.emitProgress(input, { stage: 'summarization', percent: 86, current: 'Synthesizing notes', etaSeconds: 20, throughput: '' });
+    // ---- 9. Synthesis -------------------------------------------------------
+    this.emitProgress(input, {
+      stage: 'synthesize',
+      percent: 86,
+      current: 'Synthesizing notes',
+      etaSeconds: 20,
+      throughput: '',
+    });
+    const synthesisInput = {
+      video,
+      transcript,
+      frames,
+      scenes,
+      alignedBlocks,
+      keyFramePaths,
+      sections,
+    };
     let finalSections: NoteSection[];
+    let counts = emptyCoverageCounts();
+    let gaps: CoverageGap[] = [];
 
     if (this._deps.synthesizer) {
-      const synthResult = await this._deps.synthesizer.synthesize(
-        {
-          video,
-          transcript,
-          frames,
-          scenes,
-          alignedBlocks,
-          keyFramePaths,
-          sections,
-        },
-        {
-          detailLevel: config.note.detailLevel,
-          enableValidation: true,
-          signal,
-        }
-      );
+      const synthResult = await this._deps.synthesizer.synthesize(synthesisInput, {
+        detailLevel: config.note.detailLevel,
+        signal,
+        privacy: config.privacy,
+        validation: config.validation,
+      });
       finalSections = synthResult.sections;
-      if (synthResult.validations.length > 0) {
-        warnings.push(`Detected ${synthResult.validations.length} concept clarification(s)/correction(s) during synthesis.`);
-      }
+      counts = synthResult.gapCounts;
+      gaps = synthResult.gaps;
+      if (synthResult.degraded)
+        warnings.push('LLM synthesis degraded; used the offline extractive notes.');
     } else {
       finalSections = await this._deps.summarizer.summarize(sections, {
         detailLevel: config.note.detailLevel,
         signal,
       });
+      const fallbackReport = checkCoverage(sectionsToText(finalSections), transcript, frames);
+      counts = fallbackReport.counts;
+      gaps = fallbackReport.gaps;
     }
     this.throwIfAborted(signal);
 
+    // ---- 9b. Independent validation & accuracy -----------------------------
+    let findings: NoteValidationResult = {
+      missingTranscript: [],
+      missingOcr: [],
+      corrections: [],
+      incomplete: [],
+      degraded: true,
+    };
+    if (this._deps.validator && config.validation.enabled) {
+      this.emitProgress(input, {
+        stage: 'validate',
+        percent: 90,
+        current: 'Validating notes',
+        etaSeconds: 15,
+        throughput: '',
+      });
+      const notesBeforeValidation = sectionsToText(finalSections);
+      findings = await this._deps.validator.validate(
+        {
+          notes: notesBeforeValidation,
+          transcript,
+          frames,
+          screenshots: keyFramePaths,
+          language: transcript.language || config.transcription.language || 'auto',
+        },
+        {
+          signal,
+          ...(config.validation.model !== undefined ? { model: config.validation.model } : {}),
+        }
+      );
+      this.throwIfAborted(signal);
+      if (!findings.degraded) {
+        this.emitProgress(input, {
+          stage: 'repair',
+          percent: 92,
+          current: 'Applying corrections',
+          etaSeconds: 10,
+          throughput: '',
+        });
+        if (this._deps.synthesizer) {
+          finalSections = await this._deps.synthesizer.revise(
+            finalSections,
+            findings,
+            synthesisInput,
+            {
+              detailLevel: config.note.detailLevel,
+              signal,
+              privacy: config.privacy,
+              validation: config.validation,
+            }
+          );
+        }
+        this.throwIfAborted(signal);
+      }
+      if (findings.corrections.length > 0) {
+        warnings.push(
+          `${findings.corrections.length} concept correction(s) applied during validation.`
+        );
+      }
+    }
+
+    // Coverage was measured on the composed notes BEFORE any verbatim appendix
+    // was rendered, so a gap can never be reclassified as covered by its own text.
+    finalSections = [...finalSections, buildValidationSection(findings, counts, gaps)];
+
     // ---- 10. Note + render -------------------------------------------------
-    this.emitProgress(input, { stage: 'rendering', percent: 94, current: 'Writing notes', etaSeconds: 5, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'rendering',
+      percent: 95,
+      current: 'Writing notes',
+      etaSeconds: 5,
+      throughput: '',
+    });
     const processingTimeMs = Date.now() - pipelineStart;
     const note = this.createNote(video, finalSections, config, processingTimeMs);
+    // Gate before any file is written: raw pipeline markers must never reach notes.
+    assertNoRawMarkers(note.toMarkdown());
     const formats = this.resolveFormats(input.formats, config);
     const noteFiles = await this.render(note, outputDir, baseName, formats);
 
-    const primaryNotePath = noteFiles[0] ?? join(outputDir, `${baseName}.md`);
+    const primaryNotePath =
+      noteFiles.find(path => path.endsWith('_notes.md')) ?? join(outputDir, `${baseName}_notes.md`);
+    const extras = noteFiles.filter(path => path !== primaryNotePath);
     const manifest: OutputFileManifest = {
       transcript: transcriptPath,
       ocr: ocrPath,
       notes: primaryNotePath,
       framesDir,
-      all: [primaryNotePath, transcriptPath, ocrPath, ...noteFiles.slice(1)],
+      all: [primaryNotePath, transcriptPath, ocrPath, ...extras],
     };
 
-    const outputFiles = [primaryNotePath, transcriptPath, ocrPath, ...noteFiles.slice(1)];
+    const outputFiles = [primaryNotePath, transcriptPath, ocrPath, ...extras];
 
-    this._deps.metrics.recordHistogram('video_analysis_duration_ms', Date.now() - startedAt, { preset: config.frameExtraction.preset });
+    this._deps.metrics.recordHistogram('video_analysis_duration_ms', Date.now() - startedAt, {
+      preset: config.frameExtraction.preset,
+    });
     this._deps.metrics.incrementCounter('videos_analyzed');
 
-    this.emitProgress(input, { stage: 'complete', percent: 100, current: 'Done', etaSeconds: 0, throughput: '' });
+    this.emitProgress(input, {
+      stage: 'complete',
+      percent: 100,
+      current: 'Done',
+      etaSeconds: 0,
+      throughput: '',
+    });
 
     return { note, video, processingTimeMs, outputFiles, manifest, warnings };
+    } finally {
+      // Runs after notes validation/rendering AND on failure/abort, so no
+      // intermediate WAVs are left behind.
+      await this.cleanupIntermediateAudio(workDir, legacyWorkDir, warnings);
+    }
+  }
+
+  /** Delete only the per-job work folders; never touch the final artifacts. */
+  private async cleanupIntermediateAudio(
+    workDir: string,
+    legacyWorkDir: string,
+    warnings: string[]
+  ): Promise<void> {
+    const dirs = workDir === legacyWorkDir ? [workDir] : [workDir, legacyWorkDir];
+    for (const dir of dirs) {
+      try {
+        await rm(dir, { recursive: true, force: true });
+        this._deps.logger.debug('Removed intermediate audio files', { dir });
+      } catch (error) {
+        const message = `Could not remove intermediate audio files in ${dir}: ${describe(error)}`;
+        warnings.push(message);
+        this._deps.logger.warn(message);
+      }
+    }
+    // Remove the empty `.work` parents too (non-recursive, so a concurrent job's
+    // files are never touched).
+    for (const parent of new Set(dirs.map(dirname))) {
+      try {
+        await rmdir(parent);
+      } catch {
+        // Non-empty (another job is running) or already gone — safe to ignore.
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -291,11 +515,18 @@ export class AnalyzeVideo {
     warnings: string[]
   ): Promise<Frame[]> {
     const frames: Frame[] = [];
-    const estimated = Math.max(1, this._deps.frameExtractor.getEstimatedFrameCount(video, config.frameExtraction));
+    const estimated = Math.max(
+      1,
+      this._deps.frameExtractor.getEstimatedFrameCount(video, config.frameExtraction)
+    );
     const start = Date.now();
 
     try {
-      for await (const frame of this._deps.frameExtractor.extractFrames(video, config.frameExtraction, signal)) {
+      for await (const frame of this._deps.frameExtractor.extractFrames(
+        video,
+        config.frameExtraction,
+        signal
+      )) {
         if (signal.aborted) break;
         frames.push(frame);
         video.addFrame(frame);
@@ -322,10 +553,16 @@ export class AnalyzeVideo {
     return frames;
   }
 
-  private async extractAudio(video: Video, signal: AbortSignal, warnings: string[]): Promise<AudioFile | null> {
+  private async extractAudio(
+    video: Video,
+    workDir: string,
+    signal: AbortSignal,
+    warnings: string[]
+  ): Promise<AudioFile | null> {
     try {
+      await mkdir(workDir, { recursive: true });
       return await this.withPool(this._deps.ffmpegPool, () =>
-        this._deps.audioExtractor.extract(video, join(process.cwd(), 'output', '.work', video.id), signal)
+        this._deps.audioExtractor.extract(video, workDir, signal)
       );
     } catch (error) {
       const message = `Audio extraction failed: ${describe(error)}`;
@@ -343,7 +580,13 @@ export class AnalyzeVideo {
     warnings: string[]
   ): Promise<Transcript> {
     const empty = (): Transcript =>
-      new Transcript(video.id, [], config.transcription.language ?? 'en', config.transcription.model, 0);
+      new Transcript(
+        video.id,
+        [],
+        config.transcription.language ?? 'en',
+        config.transcription.model,
+        0
+      );
 
     if (!audio) {
       warnings.push('No audio track available; the note has no transcript.');
@@ -386,7 +629,10 @@ export class AnalyzeVideo {
         frame.setOCRResult(result);
       } catch (error) {
         failures += 1;
-        this._deps.logger.debug('OCR skipped for frame', { frameId: frame.id, error: describe(error) });
+        this._deps.logger.debug('OCR skipped for frame', {
+          frameId: frame.id,
+          error: describe(error),
+        });
       }
 
       if (index % 5 === 0 || index === frames.length - 1) {
@@ -401,7 +647,9 @@ export class AnalyzeVideo {
     }
 
     if (failures > 0 && failures === frames.length) {
-      warnings.push('OCR failed for every frame; check that Tesseract is installed and the language packs exist.');
+      warnings.push(
+        'OCR failed for every frame; check that Tesseract is installed and the language packs exist.'
+      );
     } else if (failures > 0) {
       warnings.push(`OCR failed for ${failures} of ${frames.length} frames.`);
     }
@@ -443,6 +691,10 @@ export class AnalyzeVideo {
       transcription: {
         model: config.transcription.model,
         enableVAD: config.transcription.enableVAD,
+        ...(config.transcription.language !== undefined
+          ? { language: config.transcription.language }
+          : {}),
+        multilingual: config.transcription.multilingual ?? false,
         ...(config.transcription.vocabularyBoost !== undefined
           ? { vocabularyBoost: config.transcription.vocabularyBoost }
           : {}),
@@ -472,8 +724,11 @@ export class AnalyzeVideo {
     config: ProcessingConfig
   ): ('md' | 'json' | 'html')[] {
     const source = requested && requested.length > 0 ? requested : config.note.outputFormats;
-    const formats = source.filter((format): format is 'md' | 'json' | 'html' => supportedFormats.has(format));
-    return formats.length > 0 ? formats : ['md'];
+    const formats = source.filter((format): format is 'md' | 'json' | 'html' =>
+      supportedFormats.has(format)
+    );
+    // The three-artifact contract always requires the notes in Markdown.
+    return formats.includes('md') ? formats : [...formats, 'md'];
   }
 
   private async render(
@@ -484,7 +739,7 @@ export class AnalyzeVideo {
   ): Promise<string[]> {
     const files: string[] = [];
     for (const format of formats) {
-      const outputPath = join(outputDir, `${baseName}.${format}`);
+      const outputPath = join(outputDir, `${baseName}_notes.${format}`);
       await this._deps.noteRenderer.render(note, outputPath);
       files.push(outputPath);
     }
@@ -497,8 +752,8 @@ export class AnalyzeVideo {
 
   private resolveConfig(userConfig?: Partial<ProcessingConfig>): ProcessingConfig {
     const base = this._deps.configProvider.getVideoProcessingConfig();
-    if (!userConfig) return base;
-    return {
+    if (!userConfig) return normalizeTranscriptionConfig(base);
+    const merged: ProcessingConfig = {
       ...base,
       ...userConfig,
       frameExtraction: { ...base.frameExtraction, ...(userConfig.frameExtraction ?? {}) },
@@ -506,10 +761,15 @@ export class AnalyzeVideo {
       transcription: { ...base.transcription, ...(userConfig.transcription ?? {}) },
       note: { ...base.note, ...(userConfig.note ?? {}) },
       batch: { ...base.batch, ...(userConfig.batch ?? {}) },
+      validation: { ...base.validation, ...(userConfig.validation ?? {}) },
     };
+    return normalizeTranscriptionConfig(merged);
   }
 
-  private async withPool<T>(pool: IResourcePool<unknown> | undefined, fn: () => Promise<T>): Promise<T> {
+  private async withPool<T>(
+    pool: IResourcePool<unknown> | undefined,
+    fn: () => Promise<T>
+  ): Promise<T> {
     if (!pool) return fn();
     const lease = await pool.acquire();
     try {
@@ -520,8 +780,13 @@ export class AnalyzeVideo {
   }
 
   private emitProgress(input: AnalyzeVideoInput, update: ProgressUpdate): void {
-    const clamped: ProgressUpdate = { ...update, percent: Math.max(0, Math.min(100, update.percent)) };
-    this._deps.logger.debug(`Progress: ${clamped.stage} ${clamped.percent.toFixed(0)}%`, { current: clamped.current });
+    const clamped: ProgressUpdate = {
+      ...update,
+      percent: Math.max(0, Math.min(100, update.percent)),
+    };
+    this._deps.logger.debug(`Progress: ${clamped.stage} ${clamped.percent.toFixed(0)}%`, {
+      current: clamped.current,
+    });
     try {
       input.progressCallback?.(clamped);
     } catch (error) {
@@ -557,7 +822,7 @@ function assignScenesToFrames(frames: Frame[], scenes: Scene[]): void {
   if (scenes.length === 0) return;
   for (const frame of frames) {
     const scene = scenes.find(
-      (candidate) =>
+      candidate =>
         !frame.timestamp.lessThan(candidate.start) && !frame.timestamp.greaterThan(candidate.end)
     );
     if (scene) frame.setSceneId(scene.id);
@@ -566,16 +831,19 @@ function assignScenesToFrames(frames: Frame[], scenes: Scene[]): void {
 
 function buildFallbackSection(video: Video, transcript: Transcript, frames: Frame[]): NoteSection {
   const visual = frames
-    .filter((frame) => frame.hasOCR())
-    .map((frame) => frame.getText().trim())
-    .filter((text) => text.length > 0)
+    .filter(frame => frame.hasOCR())
+    .map(frame => frame.getText().trim())
+    .filter(text => text.length > 0)
     .join('\n');
 
-  const audio = transcript.segments.map((segment) => segment.text.trim()).filter((text) => text.length > 0).join(' ');
+  const audio = transcript.segments
+    .map(segment => segment.text.trim())
+    .filter(text => text.length > 0)
+    .join(' ');
 
   const parts: string[] = [];
-  if (visual.length > 0) parts.push('**On screen**', '', visual, '');
-  if (audio.length > 0) parts.push('**Transcript**', '', audio, '');
+  if (visual.length > 0) parts.push('**On screen text**', '', visual, '');
+  if (audio.length > 0) parts.push('**Spoken content**', '', audio, '');
   if (parts.length === 0) {
     parts.push('No text could be extracted from this video.');
   }
@@ -590,6 +858,10 @@ function buildFallbackSection(video: Video, transcript: Transcript, frames: Fram
     citations: [],
     metadata: { fallback: true },
   };
+}
+
+function sectionsToText(sections: NoteSection[]): string {
+  return sections.map(section => `## ${section.title}\n${section.content}`).join('\n\n');
 }
 
 function describe(error: unknown): string {
