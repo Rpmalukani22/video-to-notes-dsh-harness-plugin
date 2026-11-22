@@ -9,6 +9,7 @@ import {
 } from '../../../src/domain/services/CorrectionFormatter.js';
 import { assertNoRawMarkers, stripRawMarkers } from '../../../src/domain/services/MarkerGuard.js';
 import { escapeAttribute, resolveLanguageIntent } from '../../../src/domain/services/LanguageIntent.js';
+import { markdownImage } from '../../../src/domain/services/MarkdownImage.js';
 import { selectTimelineScreenshots } from '../../../src/domain/services/ScreenshotSelector.js';
 import { matchScreenshots } from '../../../src/domain/services/ScreenshotMatcher.js';
 import { checkCoverage } from '../../../src/domain/services/CoverageChecker.js';
@@ -28,6 +29,16 @@ function section(id: string, ms: number): NoteSection {
     metadata: {},
   };
 }
+
+describe('MarkdownImage (plan path)', () => {
+  it('percent-encodes spaces and parentheses but keeps path separators', () => {
+    const rendered = markdownImage('Key slide', '20 Normal Distribution_frames/frame (1).jpg');
+    expect(rendered).toBe('![Key slide](20%20Normal%20Distribution_frames/frame%20%281%29.jpg)');
+    expect(decodeURIComponent(rendered.split('(')[1]!.split(')')[0]!)).toBe(
+      '20 Normal Distribution_frames/frame (1).jpg'
+    );
+  });
+});
 
 describe('CorrectionFormatter', () => {
   const base = {

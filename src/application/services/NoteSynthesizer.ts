@@ -15,6 +15,7 @@ import { checkCoverage } from '../../domain/services/CoverageChecker.js';
 import { stripRawMarkers } from '../../domain/services/MarkerGuard.js';
 import { matchScreenshots } from '../../domain/services/ScreenshotMatcher.js';
 import { selectTimelineScreenshots } from '../../domain/services/ScreenshotSelector.js';
+import { markdownImage } from '../../domain/services/MarkdownImage.js';
 import { emptyCoverageCounts } from '../../domain/entities/ValidationFinding.js';
 import {
   assertCloudLlmAllowed,
@@ -289,7 +290,7 @@ export class NoteSynthesizer implements INoteSynthesizer {
       const image = matched !== null && matched !== undefined && !usedImages.has(matched)
         ? matched : null;
       if (image !== null) usedImages.add(image);
-      const heading = image ? `![Key slide](${image})\n\n` : '';
+      const heading = image ? `${markdownImage('Key slide', image)}\n\n` : '';
       const sentences = rankSentences(stripRawMarkers(section.content).replace(/\*\*/g, ''), 8);
       const bullets = sentences.map(
         sentence => `- **${firstClause(sentence)}**${restOf(sentence)}`
@@ -316,7 +317,7 @@ export class NoteSynthesizer implements INoteSynthesizer {
       .map(frame => input.keyFramePaths.get(frame.id))
       .filter((path): path is string => typeof path === 'string' && path.length > 0))];
     if (images.length === 0 || sections.length === 0) return sections;
-    const embeds = images.map(path => `![Key slide](${path})`).join('\n\n');
+    const embeds = images.map(path => markdownImage('Key slide', path)).join('\n\n');
     return sections.map((section, index) =>
       index === 0 ? { ...section, content: `${embeds}\n\n${section.content}` } : section
     );

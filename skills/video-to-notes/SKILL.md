@@ -53,7 +53,7 @@ Screenshots are saved to `[video]_frames/`. This folder is a supporting asset, n
    - `notesPath`, `transcriptPath` and `ocrPath` are all present and non-empty;
    - `framesDir` is present and contains screenshots;
    - `warnings` does not contain an unresolved `VAD_EMPTY_TRANSCRIPT` or privacy/cost degradation;
-   - the notes contain `## Validation & Accuracy` and at least one `![](...)` screenshot link.
+   - the notes contain `## Validation & Accuracy` and at least one `![](...)` screenshot link. Image links are percent-encoded (e.g. `20%20Normal%20Distribution_frames/frame_01.jpg`) so spaces and parentheses in folder names do not break Markdown renderers — do not rewrite them to raw paths.
    If any check fails, say so explicitly and give the paths/warnings. Do not silently present a partial result.
 
 5. **Report** all three file paths and the screenshots folder to the user.
