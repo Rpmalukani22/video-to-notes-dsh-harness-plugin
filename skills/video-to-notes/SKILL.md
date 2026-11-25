@@ -65,7 +65,12 @@ Screenshots are saved to `[video]_frames/`. You (the harness) then create a four
    Write a separate file named **`[video]_CURATED_NOTES.md`** in the same output directory. This is the final, reader-ready version; do not modify the three raw artifacts.
    - Open with a title, source video, duration/language and a table of contents.
    - Organise into clear sections with **bold** key terms, tables, code blocks and short quotes from the transcript.
-   - Attach relevant screenshots in every section: reuse the percent-encoded relative links from `[video]_notes.md` (for example `![Slide](20%20Normal%20Distribution_frames/frame_03_00-01-00-000.jpg)`), or build the same form from the `[video]_frames/` directory. Never use raw paths with spaces. Verify each link points to a real JPG.
+   - Attach relevant screenshots in every section by **copying the exact `![...](...)` lines from `[video]_notes.md`**. That file is the source of truth for valid, percent-encoded relative links (e.g. `![Key slide](20%20Normal%20Distribution_frames/frame_03_00-01-00-000.jpg)`). Never invent frame numbers or timestamps, never use `file:///...` or absolute paths, and never write raw paths with spaces. If you need more links than the notes file contains, stop — do not fabricate any.
+   - **Validate deterministically before reporting:** run
+     ```sh
+     node scripts/fix-curated-images.mjs "<video>_CURATED_NOTES.md" "<video>_notes.md" "<video>_frames"
+     ```
+     (from the repo `C:\src\ai_workspace\video-to-notes`). This removes any link that does not resolve and appends the verified links from the plugin notes under `## 📸 Screenshots`. Report the script's output.
    - Cross-check the curated text against both the transcript and the OCR. Nothing important from either may be omitted; add a short **Coverage** note listing anything intentionally skipped.
    - Where the instructor's statement is wrong or incomplete, add a callout: `> ⚠️ Instructor said "X", however the correct concept is Y.` Only flag what you can justify from the sources or established knowledge.
    - Keep mathematical notation readable (plain text or fenced blocks) and preserve timestamps where useful.
